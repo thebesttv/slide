@@ -1,0 +1,1306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>基于 Transformer 的 Source Code Summarization</title>
+<meta name="author" content="(thebesttv)"/>
+<style type="text/css">
+.underline { text-decoration: underline; }
+</style>
+<link rel="stylesheet" href="../reveal.js/dist/reveal.css"/>
+
+<link rel="stylesheet" href="../reveal.js/dist/theme/white.css" id="theme"/>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlightjs/styles/atom-one-light.css"/><script type="text/javascript" src="https://cdn.jsdelivr.net/npm/mathjax@2.7.5/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+<style> .reveal h1 { font-size: 2em; } </style>
+<style> .reveal h1, .reveal h2, .reveal h3, .reveal h4, .reveal h5, .reveal h6 { text-transform: none; } </style>
+
+        <style>
+        /* From: https://endlessparentheses.com/public/css/endless.css */
+        /* See also: https://meta.superuser.com/questions/4788/css-for-the-new-kbd-style */
+        kbd
+        {
+          -moz-border-radius: 6px;
+          -moz-box-shadow: 0 1px 0 rgba(0,0,0,0.2),0 0 0 2px #fff inset;
+          -webkit-border-radius: 6px;
+          -webkit-box-shadow: 0 1px 0 rgba(0,0,0,0.2),0 0 0 2px #fff inset;
+          background-color: #f7f7f7;
+          border: 1px solid #ccc;
+          border-radius: 6px;
+          box-shadow: 0 1px 0 rgba(0,0,0,0.2),0 0 0 2px #fff inset;
+          color: #333;
+          display: inline-block;
+          font-family: 'Droid Sans Mono', monospace;
+          font-size: 80%;
+          font-weight: normal;
+          line-height: inherit;
+          margin: 0 .1em;
+          padding: .08em .4em;
+          text-shadow: 0 1px 0 #fff;
+          word-spacing: -4px;
+        
+          box-shadow: 2px 2px 2px #222; /* MA: An extra I've added. */
+        }
+        </style>
+        <link rel="stylesheet" type="text/css" href="https://alhassy.github.io/org-special-block-extras/tooltipster/dist/css/tooltipster.bundle.min.css"/>
+        
+        <link rel="stylesheet" type="text/css" href="https://alhassy.github.io/org-special-block-extras/tooltipster/dist/css/plugins/tooltipster/sideTip/themes/tooltipster-sideTip-punk.min.css" />
+        
+        <script type="text/javascript">
+            if (typeof jQuery == 'undefined') {
+                document.write(unescape('%3Cscript src="https://code.jquery.com/jquery-1.10.0.min.js"%3E%3C/script%3E'));
+            }
+        </script>
+        
+         <script type="text/javascript"            src="https://alhassy.github.io/org-special-block-extras/tooltipster/dist/js/tooltipster.bundle.min.js"></script>
+        
+          <script>
+                 $(document).ready(function() {
+                     $('.tooltip').tooltipster({
+                         theme: 'tooltipster-punk',
+                         contentAsHTML: true,
+                         animation: 'grow',
+                         delay: [100,500],
+                         // trigger: 'click'
+                         trigger: 'custom',
+                         triggerOpen: {
+                             mouseenter: true
+                         },
+                         triggerClose: {
+                             originClick: true,
+                             scroll: true
+                         }
+         });
+                 });
+             </script>
+        
+        <style>
+           abbr {color: red;}
+        
+           .tooltip { border-bottom: 1px dotted #000;
+                      color:red;
+                      text-decoration: none;}
+        </style>
+</head>
+<body>
+<div class="reveal">
+<div class="slides">
+<section id="sec-title-slide"><h1 class="title">基于 Transformer 的 Source Code Summarization</h1><h2 class="author">thebesttv</h2>
+</section>
+<section id="sec-table-of-contents"><div id="table-of-contents" role="doc-toc">
+<h2>Table of Contents</h2>
+<div id="text-table-of-contents" role="doc-toc">
+<ul>
+<li><a href="#/slide-org7a5fba1">1. 任务</a>
+<ul>
+<li><a href="#/slide-orgb4b9333">1.1. 一些问题</a></li>
+</ul>
+</li>
+<li><a href="#/slide-org476a603">2. 原理</a>
+<ul>
+<li><a href="#/slide-org11b03ea">2.1. 代码表示</a></li>
+<li><a href="#/slide-org72cc9f8">2.2. Transformer</a></li>
+</ul>
+</li>
+<li><a href="#/slide-orgb40175c">3. 实验</a>
+<ul>
+<li><a href="#/slide-orgeac77f3">3.1. 数据集</a></li>
+<li><a href="#/slide-org5bf3a7d">3.2. 评价指标</a></li>
+<li><a href="#/slide-org2a1f4f2">3.3. 参数</a></li>
+<li><a href="#/slide-org19bdb54">3.4. 结果</a></li>
+<li><a href="#/slide-org421cf85">3.5. Metric的一些问题</a></li>
+</ul>
+</li>
+</ul>
+</div>
+</div>
+</section>
+
+<section>
+<section id="slide-org7a5fba1">
+<h2 id="org7a5fba1"><span class="section-number-2">1.</span> 任务</h2>
+<ul>
+<li>Automatic Source Code Summarization (ASCS)</li>
+<li>将代码转换成自然语言</li>
+<li><p>
+函数
+</p>
+<div class="org-src-container">
+
+<pre   ><code class="java" >public static String selectText(XPathExpression expr, Node context) {
+    try {
+        return (String)expr.evaluate(context, XPathConstants.STRING );
+    } catch (XPathExpressionException e) {
+        throw new XmlException(e);
+    }
+}
+</code></pre>
+</div>
+<p>
+&rarr; 一句话注释
+</p>
+<div class="org-src-container">
+
+<pre   ><code class="text" >evaluates the xpath expression as a text string .
+</code></pre>
+</div></li>
+
+</ul>
+
+</section>
+</section>
+<section>
+<section id="slide-orgb4b9333">
+<h3 id="orgb4b9333"><span class="section-number-3">1.1.</span> 一些问题</h3>
+<ul>
+<li>long-range dependency
+<ul>
+<li><del>RNN</del></li>
+<li>Transformer ✓</li>
+
+</ul></li>
+<li>代码 &ne; 文本
+<ul>
+<li>代码非线性, 如何表示</li>
+<li>特殊符号 <code>(</code> <code>)</code> <code>.</code> <code>:</code> &#x2026;</li>
+<li>变量名包含多个单词
+<ul>
+<li><code>memoryIsLow</code> ?</li>
+<li><code>memory</code>, <code>Is</code>, <code>Low</code> ?</li>
+
+</ul></li>
+
+</ul></li>
+
+</ul>
+
+</section>
+</section>
+<section>
+<section id="slide-org476a603">
+<h2 id="org476a603"><span class="section-number-2">2.</span> 原理</h2>
+<p>
+关注: Different design choices
+</p>
+
+<ul>
+<li>代码表示</li>
+<li>Transformer
+<ul>
+<li>Positional Encoding</li>
+<li>Copy Attention</li>
+<li>输出</li>
+
+</ul></li>
+
+</ul>
+
+</section>
+</section>
+<section>
+<section id="slide-org11b03ea">
+<h3 id="org11b03ea"><span class="section-number-3">2.1.</span> 代码表示</h3>
+<p>
+如何表示结构化的代码?
+</p>
+<ul>
+<li><p>
+抽象语法树 X
+</p>
+
+<p>
+Structure-based Traversal
+</p>
+
+<div id="orgc23157d" class="figure">
+<p><img src="./img/sbt.png" alt="sbt.png" width="60%" style="margin-left: auto; margin-right: auto;" />
+</p>
+</div></li>
+<li><p>
+线性 ✓
+</p>
+
+<p>
+把代码当作文本
+</p></li>
+
+</ul>
+
+</section>
+</section>
+<section>
+<section id="slide-org72cc9f8">
+<h3 id="org72cc9f8"><span class="section-number-3">2.2.</span> Transformer</h3>
+
+<div id="orgc979a51" class="figure">
+<p><img src="./img/transformer.svg" alt="transformer.svg" />
+</p>
+</div>
+
+</section>
+<section id="slide-orgfb22aa1">
+<h4 id="orgfb22aa1"><span class="section-number-4">2.2.1.</span> Positional Encoding</h4>
+<div class="outline-text-4" id="text-2-2-1">
+</div>
+<ol class="org-ol">
+<li><a id="orgf7c1f59"></a>注释: 绝对位置编码<br />
+<ul>
+<li>绝对位置编码学习得到</li>
+
+</ul>
+</li>
+
+<li><a id="org09e3bd5"></a>代码: 相对位置编码<br />
+<ul>
+<li>每个输入向量的位置编码只与其左右 \(k\) 个向量有关</li>
+<li>计算第一层 attention 时, 添加 \(v'_{ij}\) 和 \(k'_{ij}\) 两个向量
+\[ \color{gray}{o_i = \sum_{j=1}^n \alpha_{ij} (v_j + \color{red}{v'_{ij}} ), \qquad e_{ij} = q_i (k_j + \color{red}{k'_{ij}})^T} \]</li>
+<li>\(v'_{ij}\) 和 \(k'_{ij}\) 只与 \(i, j\) 之间距离有关
+\(v'_{ij} = w_{dist(i, j)}\)</li>
+
+</ul>
+
+</section>
+<section id="slide-org09e3bd5-split">
+
+<ul>
+<li>距离的方向
+<ul>
+<li><code>a + b</code> \(\iff\) <code>b + a</code></li>
+<li>是否要考虑 <code>a</code> 和 <code>b</code> 的左右方向?
+<ul>
+<li>即距离有无绝对值?</li>
+<li>\(dist(i,j) = | i - j |\)</li>
+<li>\(dist(i,j) = i - j\)</li>
+
+</ul></li>
+<li><code>x = v[i] if i &lt; len(v) else 0</code></li>
+<li>考虑方向</li>
+
+</ul></li>
+<li>最大距离 \(k\) (clipping)
+<ul>
+<li>\(|dist(i, j)| \le k\)</li>
+
+</ul></li>
+
+</ul>
+</li>
+</ol>
+
+</section>
+<section id="slide-orge7bc0bc">
+<h4 id="orge7bc0bc"><span class="section-number-4">2.2.2.</span> Copy Attention / Copy Mechanism</h4>
+<ul>
+<li>有时输入存在没见过的词</li>
+<li>学习一个概率 \(p_{gen}\), 决定是否要复制该词作为输出</li>
+
+</ul>
+
+
+<div id="org64c0540" class="figure">
+<p><img src="./img/copy-attention.png" alt="copy-attention.png" width="75%" style="margin-left: auto; margin-right: auto;" />
+</p>
+</div>
+
+</section>
+<section id="slide-orgb2b0da2">
+<h4 id="orgb2b0da2"><span class="section-number-4">2.2.3.</span> 输出</h4>
+<ul>
+<li><p>
+Greedy Search X
+</p>
+
+<p>
+并行取最值
+</p></li>
+<li><p>
+Beam Serach ✓
+</p>
+
+<p>
+依次选择前 \(n\) 大
+</p>
+
+<div id="orgf8a2805" class="figure">
+<p><img src="./img/beam-search.jpg" alt="beam-search.jpg" width="80%" style="margin-left: auto; margin-right: auto;" />
+</p>
+</div></li>
+
+</ul>
+
+</section>
+</section>
+<section>
+<section id="slide-orgb40175c">
+<h2 id="orgb40175c"><span class="section-number-2">3.</span> 实验</h2>
+<ul>
+<li>四个模型
+<ul>
+<li>是否使用 Relative position (相对位置编码)</li>
+<li>是否使用 Copy attention</li>
+
+</ul></li>
+
+</ul>
+
+<table border="2" cellspacing="0" cellpadding="6" rules="groups" frame="hsides">
+
+
+<colgroup>
+<col  class="org-left" />
+
+<col  class="org-left" />
+
+<col  class="org-left" />
+</colgroup>
+<thead>
+<tr>
+<th scope="col" class="org-left">模型名</th>
+<th scope="col" class="org-left">RP</th>
+<th scope="col" class="org-left">CA</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="org-left">Base</td>
+<td class="org-left">X</td>
+<td class="org-left">X</td>
+</tr>
+
+<tr>
+<td class="org-left">Only-CA</td>
+<td class="org-left">X</td>
+<td class="org-left">✓</td>
+</tr>
+
+<tr>
+<td class="org-left">Only-RP</td>
+<td class="org-left">✓</td>
+<td class="org-left">X</td>
+</tr>
+
+<tr>
+<td class="org-left"><b>Full</b></td>
+<td class="org-left">✓</td>
+<td class="org-left">✓</td>
+</tr>
+</tbody>
+</table>
+
+</section>
+<section id="slide-orgb40175c-split">
+
+<ul>
+<li>环境
+<ul>
+<li>Ubuntu 18.04 LTS</li>
+<li>3090单卡</li>
+<li>CUDA 11.4</li>
+<li>Python 3.8.12</li>
+<li>Torch 1.10.2</li>
+
+</ul></li>
+
+</ul>
+
+</section>
+</section>
+<section>
+<section id="slide-orgeac77f3">
+<h3 id="orgeac77f3"><span class="section-number-3">3.1.</span> 数据集</h3>
+<p>
+<a href="https://github.com/xing-hu/TL-CodeSum">TL-CodeSum</a>
+</p>
+
+<p>
+从GitHub repo中爬取Java代码
+</p>
+<ul>
+<li>每个repo至少20个star</li>
+
+</ul>
+
+</section>
+<section id="slide-org6b27a2a">
+<h4 id="org6b27a2a"><span class="section-number-4">3.1.1.</span> 预处理</h4>
+<ul>
+<li>取函数注释的第一句话作为summary</li>
+<li>去除低质量代码
+<ul>
+<li>没有注释或注释只有几个字的</li>
+<li>getter / setter / constructor 等注释过于简单的函数</li>
+
+</ul></li>
+<li>注释转token
+<ul>
+<li>大写转小写</li>
+<li>保留特殊字符 (<code>&lt;</code> <code>&gt;</code> <code>{</code> <code>}</code> <code>(</code> <code>)</code> <code>?</code> <code>.</code> <code>;</code> &#x2026;)</li>
+<li>添加 <code>&lt;unk&gt;</code>, <code>&lt;s&gt;</code> (BOS), <code>&lt;/s&gt;</code> (EOS)</li>
+
+</ul></li>
+
+</ul>
+</section>
+<section id="slide-org6b27a2a-split">
+<ul>
+<li>代码转token: 减小词汇量
+<ul>
+<li>保留特殊字符</li>
+<li>变量名分割
+<ul>
+<li><code>memoryIsLow</code> &rarr; <code>memory</code>, <code>Is</code>, <code>Low</code></li>
+<li><code>m_BatchBuffer</code> &rarr; <code>m</code>, <code>Batch</code>, <code>Buffer</code></li>
+<li><code>sha256_HMAC</code> &rarr; <code>sha</code>, <code>256</code>, <code>HMAC</code></li>
+
+</ul></li>
+<li>数字 &rarr; <code>_NUM</code> (负号保留)
+<ul>
+<li><code>-1024</code> &rarr; <code>-</code>, <code>_NUM</code></li>
+
+</ul></li>
+<li>字符串 &rarr; <code>STRING</code></li>
+<li>添加 <code>&lt;unk&gt;</code></li>
+
+</ul></li>
+
+</ul>
+
+</section>
+<section id="slide-org6b27a2a-split">
+
+<p>
+源码
+</p>
+<div class="org-src-container">
+
+<pre   ><code class="java" >/**
+ * Is the str a simple match pattern.
+ */
+public static boolean isSimpleMatchPattern(String str) {
+    return str.indexOf('*') != -1;
+}
+</code></pre>
+</div>
+
+<p>
+注释
+</p>
+<div class="org-src-container">
+
+<pre   ><code class="text" >is the str a simple match pattern .
+</code></pre>
+</div>
+
+<p>
+预处理后代码
+</p>
+<div class="org-src-container">
+
+<pre   ><code class="text" >public static boolean
+is Simple Match Pattern ( String str )
+{ return str . index Of ( STRING ) != - NUM ; }
+</code></pre>
+</div>
+
+</section>
+<section id="slide-org0997d05">
+<h4 id="org0997d05"><span class="section-number-4">3.1.2.</span> 大小</h4>
+<p>
+共87,136个样本, 按8:1:1分割
+</p>
+
+<table border="2" cellspacing="0" cellpadding="6" rules="groups" frame="hsides">
+
+
+<colgroup>
+<col  class="org-left" />
+
+<col  class="org-left" />
+</colgroup>
+<tbody>
+<tr>
+<td class="org-left">训练</td>
+<td class="org-left">69,708</td>
+</tr>
+
+<tr>
+<td class="org-left">测试</td>
+<td class="org-left">8,714</td>
+</tr>
+
+<tr>
+<td class="org-left">验证</td>
+<td class="org-left">8,714</td>
+</tr>
+
+<tr>
+<td class="org-left">函数Token (无变量名分割)</td>
+<td class="org-left">292,626</td>
+</tr>
+
+<tr>
+<td class="org-left">函数Token (变量名分割)</td>
+<td class="org-left">66,650</td>
+</tr>
+
+<tr>
+<td class="org-left">注释Token</td>
+<td class="org-left">46,895</td>
+</tr>
+</tbody>
+</table>
+
+</section>
+<section id="slide-org571d88b">
+<h4 id="org571d88b"><span class="section-number-4">3.1.3.</span> 格式</h4>
+<div class="org-src-container">
+
+<pre   ><code class="text" >├── dev (验证)
+│   ├── code.original (代码)
+│   ├── code.original_subtoken (变量名分割后代码)
+│   └── javadoc.original (注释)
+├── test (测试)
+│   ├── code.original
+│   ├── code.original_subtoken
+│   └── javadoc.original
+└── train (训练)
+    ├── code.original
+    ├── code.original_subtoken
+    └── javadoc.original
+</code></pre>
+</div>
+
+</section>
+<section id="slide-org571d88b-split">
+<p>
+<code>train/code.original_subtoken</code>
+</p>
+<div class="org-src-container">
+
+<pre   ><code class="text" >@ Override public int run Command ( boolean merge Error Into Output , String ... commands ) throws IO Exception , Interrupted Exception { return run Command ( merge Error Into Output , new Array List &lt; String &gt; ( Arrays . as List ( commands ) ) ) ; }
+private int find PLV ( int M Price List ID ) { Timestamp price Date = null ; String date Str = Env . get Context ( Env . get Ctx ( ) , p Window No , STRING ) ; if ( date Str != null &amp;&amp; date Str . length ( ) &gt; NUM ) price Date = Env . get Context As Date ( Env . get Ctx ( ) , p Window No , STRING ) ; else { date Str = Env . get Context ( Env . get Ctx ( ) , p Window No , STRING ) ; if ( date Str != null &amp;&amp; date Str . length ( ) &gt; NUM ) price Date = Env . get Context As Date ( Env . get Ctx ( ) , p Window No , STRING ) ; } if ( price Date == null ) price Date = new Timestamp ( System . current Time Millis ( ) ) ; log . config ( STRING + M Price List ID + STRING + price Date ) ; int ret Value = NUM ; String sql = STRING + STRING + STRING + STRING + STRING + STRING ; try { Prepared Statement pstmt = DB . prepare Statement ( sql , null ) ; pstmt . set Int ( NUM , M Price List ID ) ; Result Set rs = pstmt . execute Query ( ) ; while ( rs . next ( ) &amp;&amp; ret Value == NUM ) { Timestamp pl Date = rs . get Timestamp ( NUM ) ; if ( ! price Date . before ( pl Date ) ) ret Value = rs . get Int ( NUM ) ; } rs . close ( ) ; pstmt . close ( ) ; } catch ( SQL Exception e ) { log . log ( Level . SEVERE , sql , e ) ; } Env . set Context ( Env . get Ctx ( ) , p Window No , STRING , ret Value ) ; return ret Value ; }
+public static boolean memory Is Low ( ) { return available Memory ( ) * NUM &lt; RUNTIME . total Memory ( ) * NUM ; }
+public String describe Attributes ( ) { String Builder sb = new String Builder ( ) ; sb . append ( STRING ) ; boolean first = BOOL ; for ( Object key : attributes . key Set ( ) ) { if ( first ) { first = BOOL ; } else { sb . append ( STRING ) ; } sb . append ( key ) ; sb . append ( STRING ) ; sb . append ( attributes . get ( key ) ) ; } sb . append ( STRING ) ; return sb . to String ( ) ; }
+public static byte [ ] next Bytes ( byte [ ] buffer ) { s Random . next Bytes ( buffer ) ; return buffer ; }
+</code></pre>
+</div>
+
+<p>
+<code>train/javadoc.original</code>
+</p>
+<div class="org-src-container">
+
+<pre   ><code class="text" >runs a command on the command line synchronously .
+find price list version and update context
+returns true if less then 5 % of the available memory is free .
+returns a string representation of the object ' s current attributes
+fill the given buffer with random bytes .
+</code></pre>
+</div>
+
+</section>
+</section>
+<section>
+<section id="slide-org5bf3a7d">
+<h3 id="org5bf3a7d"><span class="section-number-3">3.2.</span> 评价指标</h3>
+<ul>
+<li>借用机器翻译的指标 (百分制)
+<ul>
+<li><a href="https://en.wikipedia.org/wiki/BLEU">BLEU</a></li>
+<li><a href="https://en.wikipedia.org/wiki/ROUGE_(metric)">ROUGE-L</a> |ruːʒ|</li>
+<li>准确率 + 召回率 + 惩罚</li>
+
+</ul></li>
+<li>准确率&amp;召回率: 分母不同
+<ul>
+<li>分子: 原始翻译与预测结果的相似程度
+<ul>
+<li>n-gram, LCS</li>
+
+</ul></li>
+<li>分母
+<ul>
+<li>准确率: 预测结果</li>
+<li>召回率: 原始翻译</li>
+
+</ul></li>
+
+</ul></li>
+
+</ul>
+
+</section>
+<section id="slide-org0a4ce43">
+<h4 id="org0a4ce43"><span class="section-number-4">3.2.1.</span> BLEU</h4>
+<ul>
+<li><p>
+相似: N-gram overlap (准确率)
+</p>
+
+<p>
+原始翻译=&ldquo;a b c&rdquo;, 预测结果=&ldquo;a a b c&rdquo;
+</p>
+<ol>
+<li>(a, b, c) ∩ (a, a, b, c) &rarr; \(p_1 = 3/4\)</li>
+<li>(ab, bc) ∩ (aa, ab, bc) &rarr; \(p_2 = 2/3\)</li>
+<li>(abc) ∩ (aab, abc) &rarr; \(p_3 = 1/2\)</li>
+
+</ol></li>
+<li>几何平均 \(\sqrt[3]{p_1 \, p_2 \, p_3}\)</li>
+<li>平滑: \(p_i\) 分子分母加一, 防止 \(p_i = 0\)</li>
+<li>Brevity Penalty: 预测结果不能太短</li>
+<li>不考虑召回率</li>
+
+</ul>
+
+</section>
+<section id="slide-org47850d9">
+<h4 id="org47850d9"><span class="section-number-4">3.2.2.</span> ROUGE-L</h4>
+<ul>
+<li>相似: 最长公共子序列(LCS)大小</li>
+<li><b>the</b> hello a cat dog <b>fox jumps</b></li>
+<li><b>the fox jumps</b></li>
+
+</ul>
+
+</section>
+</section>
+<section>
+<section id="slide-org2a1f4f2">
+<h3 id="org2a1f4f2"><span class="section-number-3">3.3.</span> 参数</h3>
+<ul>
+<li>batch size: 训练 64, 测试 128</li>
+<li>Full: 200个epoch, 其他: 90个eopch</li>
+<li>6层Transformer, 8头attention, beam size: 4</li>
+<li>\(d_{model} = 512\) (输入输出为一串向量, 每个向量 \(x_i \in R^{d_{model}}\))</li>
+<li>\(d_{ff} = 2048\) (FFNN)</li>
+<li>\(d_k = d_v = 64\) (\(W^Q, W^K \in R^{d_{model}\times d_k}\), \(W^V \in R^{d_{model}\times d_v}\))</li>
+<li>\(k = 16\) (相对位置编码的clipping distance)</li>
+
+</ul>
+
+</section>
+<section id="slide-org2a1f4f2-split">
+<ul>
+<li>Adam优化器, 学习率 \(lr = 10^{-4}\), \(decay = 0.99\)
+<ul>
+<li>每个epoch: \(lr \leftarrow lr \times decay\)</li>
+
+</ul></li>
+<li>Dropout: 0.2, 无weight decay</li>
+<li>Early Stop: 20个epoch</li>
+<li>代码最大长度: 150</li>
+<li>注释最大长度: 50</li>
+<li>单个token最大长度: 30</li>
+
+</ul>
+
+</section>
+<section id="slide-orga89af35">
+<h4 id="orga89af35"><span class="section-number-4">3.3.1.</span> Base</h4>
+<ul>
+<li>encoder-decoder: 44.1M</li>
+<li>total: 76.1M</li>
+
+</ul>
+
+<div class="org-src-container">
+
+<pre   ><code class="text" >+------------------------------------------------------------------------------+--------------+----------+
+| Layer Name                                                                   | Output Shape |  Param # |
++------------------------------------------------------------------------------+--------------+----------+
+| embedder.src_word_embeddings.make_embedding.emb_luts.0.weight                | [34131, 512] | 17475072 |
+| embedder.tgt_word_embeddings.make_embedding.emb_luts.0.weight                | [28239, 512] | 14458368 |
+| embedder.tgt_pos_embeddings.weight                                           |    [52, 512] |    26624 |
+| encoder.transformer.layer.0.attention.key.weight                             |   [512, 512] |   262144 |
+| encoder.transformer.layer.0.attention.key.bias                               |        [512] |      512 |
+| encoder.transformer.layer.0.attention.query.weight                           |   [512, 512] |   262144 |
+| encoder.transformer.layer.0.attention.query.bias                             |        [512] |      512 |
+| encoder.transformer.layer.0.attention.value.weight                           |   [512, 512] |   262144 |
+| encoder.transformer.layer.0.attention.value.bias                             |        [512] |      512 |
+| encoder.transformer.layer.0.attention.output.weight                          |   [512, 512] |   262144 |
+| encoder.transformer.layer.0.attention.output.bias                            |        [512] |      512 |
+| encoder.transformer.layer.0.layer_norm.weight                                |        [512] |      512 |
+| encoder.transformer.layer.0.layer_norm.bias                                  |        [512] |      512 |
+| encoder.transformer.layer.0.feed_forward.intermediate.weight                 |  [2048, 512] |  1048576 |
+| encoder.transformer.layer.0.feed_forward.intermediate.bias                   |       [2048] |     2048 |
+| encoder.transformer.layer.0.feed_forward.output.weight                       |  [512, 2048] |  1048576 |
+| encoder.transformer.layer.0.feed_forward.output.bias                         |        [512] |      512 |
+| encoder.transformer.layer.0.feed_forward.layer_norm.weight                   |        [512] |      512 |
+| encoder.transformer.layer.0.feed_forward.layer_norm.bias                     |        [512] |      512 |
+| encoder.transformer.layer.1.attention.key.weight                             |   [512, 512] |   262144 |
+| encoder.transformer.layer.1.attention.key.bias                               |        [512] |      512 |
+| encoder.transformer.layer.1.attention.query.weight                           |   [512, 512] |   262144 |
+| encoder.transformer.layer.1.attention.query.bias                             |        [512] |      512 |
+| encoder.transformer.layer.1.attention.value.weight                           |   [512, 512] |   262144 |
+| encoder.transformer.layer.1.attention.value.bias                             |        [512] |      512 |
+| encoder.transformer.layer.1.attention.output.weight                          |   [512, 512] |   262144 |
+| encoder.transformer.layer.1.attention.output.bias                            |        [512] |      512 |
+| encoder.transformer.layer.1.layer_norm.weight                                |        [512] |      512 |
+| encoder.transformer.layer.1.layer_norm.bias                                  |        [512] |      512 |
+| encoder.transformer.layer.1.feed_forward.intermediate.weight                 |  [2048, 512] |  1048576 |
+| encoder.transformer.layer.1.feed_forward.intermediate.bias                   |       [2048] |     2048 |
+| encoder.transformer.layer.1.feed_forward.output.weight                       |  [512, 2048] |  1048576 |
+| encoder.transformer.layer.1.feed_forward.output.bias                         |        [512] |      512 |
+| encoder.transformer.layer.1.feed_forward.layer_norm.weight                   |        [512] |      512 |
+| encoder.transformer.layer.1.feed_forward.layer_norm.bias                     |        [512] |      512 |
+| encoder.transformer.layer.2.attention.key.weight                             |   [512, 512] |   262144 |
+| encoder.transformer.layer.2.attention.key.bias                               |        [512] |      512 |
+| encoder.transformer.layer.2.attention.query.weight                           |   [512, 512] |   262144 |
+| encoder.transformer.layer.2.attention.query.bias                             |        [512] |      512 |
+| encoder.transformer.layer.2.attention.value.weight                           |   [512, 512] |   262144 |
+| encoder.transformer.layer.2.attention.value.bias                             |        [512] |      512 |
+| encoder.transformer.layer.2.attention.output.weight                          |   [512, 512] |   262144 |
+| encoder.transformer.layer.2.attention.output.bias                            |        [512] |      512 |
+| encoder.transformer.layer.2.layer_norm.weight                                |        [512] |      512 |
+| encoder.transformer.layer.2.layer_norm.bias                                  |        [512] |      512 |
+| encoder.transformer.layer.2.feed_forward.intermediate.weight                 |  [2048, 512] |  1048576 |
+| encoder.transformer.layer.2.feed_forward.intermediate.bias                   |       [2048] |     2048 |
+| encoder.transformer.layer.2.feed_forward.output.weight                       |  [512, 2048] |  1048576 |
+| encoder.transformer.layer.2.feed_forward.output.bias                         |        [512] |      512 |
+| encoder.transformer.layer.2.feed_forward.layer_norm.weight                   |        [512] |      512 |
+| encoder.transformer.layer.2.feed_forward.layer_norm.bias                     |        [512] |      512 |
+| encoder.transformer.layer.3.attention.key.weight                             |   [512, 512] |   262144 |
+| encoder.transformer.layer.3.attention.key.bias                               |        [512] |      512 |
+| encoder.transformer.layer.3.attention.query.weight                           |   [512, 512] |   262144 |
+| encoder.transformer.layer.3.attention.query.bias                             |        [512] |      512 |
+| encoder.transformer.layer.3.attention.value.weight                           |   [512, 512] |   262144 |
+| encoder.transformer.layer.3.attention.value.bias                             |        [512] |      512 |
+| encoder.transformer.layer.3.attention.output.weight                          |   [512, 512] |   262144 |
+| encoder.transformer.layer.3.attention.output.bias                            |        [512] |      512 |
+| encoder.transformer.layer.3.layer_norm.weight                                |        [512] |      512 |
+| encoder.transformer.layer.3.layer_norm.bias                                  |        [512] |      512 |
+| encoder.transformer.layer.3.feed_forward.intermediate.weight                 |  [2048, 512] |  1048576 |
+| encoder.transformer.layer.3.feed_forward.intermediate.bias                   |       [2048] |     2048 |
+| encoder.transformer.layer.3.feed_forward.output.weight                       |  [512, 2048] |  1048576 |
+| encoder.transformer.layer.3.feed_forward.output.bias                         |        [512] |      512 |
+| encoder.transformer.layer.3.feed_forward.layer_norm.weight                   |        [512] |      512 |
+| encoder.transformer.layer.3.feed_forward.layer_norm.bias                     |        [512] |      512 |
+| encoder.transformer.layer.4.attention.key.weight                             |   [512, 512] |   262144 |
+| encoder.transformer.layer.4.attention.key.bias                               |        [512] |      512 |
+| encoder.transformer.layer.4.attention.query.weight                           |   [512, 512] |   262144 |
+| encoder.transformer.layer.4.attention.query.bias                             |        [512] |      512 |
+| encoder.transformer.layer.4.attention.value.weight                           |   [512, 512] |   262144 |
+| encoder.transformer.layer.4.attention.value.bias                             |        [512] |      512 |
+| encoder.transformer.layer.4.attention.output.weight                          |   [512, 512] |   262144 |
+| encoder.transformer.layer.4.attention.output.bias                            |        [512] |      512 |
+| encoder.transformer.layer.4.layer_norm.weight                                |        [512] |      512 |
+| encoder.transformer.layer.4.layer_norm.bias                                  |        [512] |      512 |
+| encoder.transformer.layer.4.feed_forward.intermediate.weight                 |  [2048, 512] |  1048576 |
+| encoder.transformer.layer.4.feed_forward.intermediate.bias                   |       [2048] |     2048 |
+| encoder.transformer.layer.4.feed_forward.output.weight                       |  [512, 2048] |  1048576 |
+| encoder.transformer.layer.4.feed_forward.output.bias                         |        [512] |      512 |
+| encoder.transformer.layer.4.feed_forward.layer_norm.weight                   |        [512] |      512 |
+| encoder.transformer.layer.4.feed_forward.layer_norm.bias                     |        [512] |      512 |
+| encoder.transformer.layer.5.attention.key.weight                             |   [512, 512] |   262144 |
+| encoder.transformer.layer.5.attention.key.bias                               |        [512] |      512 |
+| encoder.transformer.layer.5.attention.query.weight                           |   [512, 512] |   262144 |
+| encoder.transformer.layer.5.attention.query.bias                             |        [512] |      512 |
+| encoder.transformer.layer.5.attention.value.weight                           |   [512, 512] |   262144 |
+| encoder.transformer.layer.5.attention.value.bias                             |        [512] |      512 |
+| encoder.transformer.layer.5.attention.output.weight                          |   [512, 512] |   262144 |
+| encoder.transformer.layer.5.attention.output.bias                            |        [512] |      512 |
+| encoder.transformer.layer.5.layer_norm.weight                                |        [512] |      512 |
+| encoder.transformer.layer.5.layer_norm.bias                                  |        [512] |      512 |
+| encoder.transformer.layer.5.feed_forward.intermediate.weight                 |  [2048, 512] |  1048576 |
+| encoder.transformer.layer.5.feed_forward.intermediate.bias                   |       [2048] |     2048 |
+| encoder.transformer.layer.5.feed_forward.output.weight                       |  [512, 2048] |  1048576 |
+| encoder.transformer.layer.5.feed_forward.output.bias                         |        [512] |      512 |
+| encoder.transformer.layer.5.feed_forward.layer_norm.weight                   |        [512] |      512 |
+| encoder.transformer.layer.5.feed_forward.layer_norm.bias                     |        [512] |      512 |
+| decoder.transformer.layer.0.attention.key.weight                             |   [512, 512] |   262144 |
+| decoder.transformer.layer.0.attention.key.bias                               |        [512] |      512 |
+| decoder.transformer.layer.0.attention.query.weight                           |   [512, 512] |   262144 |
+| decoder.transformer.layer.0.attention.query.bias                             |        [512] |      512 |
+| decoder.transformer.layer.0.attention.value.weight                           |   [512, 512] |   262144 |
+| decoder.transformer.layer.0.attention.value.bias                             |        [512] |      512 |
+| decoder.transformer.layer.0.attention.output.weight                          |   [512, 512] |   262144 |
+| decoder.transformer.layer.0.attention.output.bias                            |        [512] |      512 |
+| decoder.transformer.layer.0.layer_norm.weight                                |        [512] |      512 |
+| decoder.transformer.layer.0.layer_norm.bias                                  |        [512] |      512 |
+| decoder.transformer.layer.0.context_attn.key.weight                          |   [512, 512] |   262144 |
+| decoder.transformer.layer.0.context_attn.key.bias                            |        [512] |      512 |
+| decoder.transformer.layer.0.context_attn.query.weight                        |   [512, 512] |   262144 |
+| decoder.transformer.layer.0.context_attn.query.bias                          |        [512] |      512 |
+| decoder.transformer.layer.0.context_attn.value.weight                        |   [512, 512] |   262144 |
+| decoder.transformer.layer.0.context_attn.value.bias                          |        [512] |      512 |
+| decoder.transformer.layer.0.context_attn.output.weight                       |   [512, 512] |   262144 |
+| decoder.transformer.layer.0.context_attn.output.bias                         |        [512] |      512 |
+| decoder.transformer.layer.0.layer_norm_2.weight                              |        [512] |      512 |
+| decoder.transformer.layer.0.layer_norm_2.bias                                |        [512] |      512 |
+| decoder.transformer.layer.0.feed_forward.intermediate.weight                 |  [2048, 512] |  1048576 |
+| decoder.transformer.layer.0.feed_forward.intermediate.bias                   |       [2048] |     2048 |
+| decoder.transformer.layer.0.feed_forward.output.weight                       |  [512, 2048] |  1048576 |
+| decoder.transformer.layer.0.feed_forward.output.bias                         |        [512] |      512 |
+| decoder.transformer.layer.0.feed_forward.layer_norm.weight                   |        [512] |      512 |
+| decoder.transformer.layer.0.feed_forward.layer_norm.bias                     |        [512] |      512 |
+| decoder.transformer.layer.1.attention.key.weight                             |   [512, 512] |   262144 |
+| decoder.transformer.layer.1.attention.key.bias                               |        [512] |      512 |
+| decoder.transformer.layer.1.attention.query.weight                           |   [512, 512] |   262144 |
+| decoder.transformer.layer.1.attention.query.bias                             |        [512] |      512 |
+| decoder.transformer.layer.1.attention.value.weight                           |   [512, 512] |   262144 |
+| decoder.transformer.layer.1.attention.value.bias                             |        [512] |      512 |
+| decoder.transformer.layer.1.attention.output.weight                          |   [512, 512] |   262144 |
+| decoder.transformer.layer.1.attention.output.bias                            |        [512] |      512 |
+| decoder.transformer.layer.1.layer_norm.weight                                |        [512] |      512 |
+| decoder.transformer.layer.1.layer_norm.bias                                  |        [512] |      512 |
+| decoder.transformer.layer.1.context_attn.key.weight                          |   [512, 512] |   262144 |
+| decoder.transformer.layer.1.context_attn.key.bias                            |        [512] |      512 |
+| decoder.transformer.layer.1.context_attn.query.weight                        |   [512, 512] |   262144 |
+| decoder.transformer.layer.1.context_attn.query.bias                          |        [512] |      512 |
+| decoder.transformer.layer.1.context_attn.value.weight                        |   [512, 512] |   262144 |
+| decoder.transformer.layer.1.context_attn.value.bias                          |        [512] |      512 |
+| decoder.transformer.layer.1.context_attn.output.weight                       |   [512, 512] |   262144 |
+| decoder.transformer.layer.1.context_attn.output.bias                         |        [512] |      512 |
+| decoder.transformer.layer.1.layer_norm_2.weight                              |        [512] |      512 |
+| decoder.transformer.layer.1.layer_norm_2.bias                                |        [512] |      512 |
+| decoder.transformer.layer.1.feed_forward.intermediate.weight                 |  [2048, 512] |  1048576 |
+| decoder.transformer.layer.1.feed_forward.intermediate.bias                   |       [2048] |     2048 |
+| decoder.transformer.layer.1.feed_forward.output.weight                       |  [512, 2048] |  1048576 |
+| decoder.transformer.layer.1.feed_forward.output.bias                         |        [512] |      512 |
+| decoder.transformer.layer.1.feed_forward.layer_norm.weight                   |        [512] |      512 |
+| decoder.transformer.layer.1.feed_forward.layer_norm.bias                     |        [512] |      512 |
+| decoder.transformer.layer.2.attention.key.weight                             |   [512, 512] |   262144 |
+| decoder.transformer.layer.2.attention.key.bias                               |        [512] |      512 |
+| decoder.transformer.layer.2.attention.query.weight                           |   [512, 512] |   262144 |
+| decoder.transformer.layer.2.attention.query.bias                             |        [512] |      512 |
+| decoder.transformer.layer.2.attention.value.weight                           |   [512, 512] |   262144 |
+| decoder.transformer.layer.2.attention.value.bias                             |        [512] |      512 |
+| decoder.transformer.layer.2.attention.output.weight                          |   [512, 512] |   262144 |
+| decoder.transformer.layer.2.attention.output.bias                            |        [512] |      512 |
+| decoder.transformer.layer.2.layer_norm.weight                                |        [512] |      512 |
+| decoder.transformer.layer.2.layer_norm.bias                                  |        [512] |      512 |
+| decoder.transformer.layer.2.context_attn.key.weight                          |   [512, 512] |   262144 |
+| decoder.transformer.layer.2.context_attn.key.bias                            |        [512] |      512 |
+| decoder.transformer.layer.2.context_attn.query.weight                        |   [512, 512] |   262144 |
+| decoder.transformer.layer.2.context_attn.query.bias                          |        [512] |      512 |
+| decoder.transformer.layer.2.context_attn.value.weight                        |   [512, 512] |   262144 |
+| decoder.transformer.layer.2.context_attn.value.bias                          |        [512] |      512 |
+| decoder.transformer.layer.2.context_attn.output.weight                       |   [512, 512] |   262144 |
+| decoder.transformer.layer.2.context_attn.output.bias                         |        [512] |      512 |
+| decoder.transformer.layer.2.layer_norm_2.weight                              |        [512] |      512 |
+| decoder.transformer.layer.2.layer_norm_2.bias                                |        [512] |      512 |
+| decoder.transformer.layer.2.feed_forward.intermediate.weight                 |  [2048, 512] |  1048576 |
+| decoder.transformer.layer.2.feed_forward.intermediate.bias                   |       [2048] |     2048 |
+| decoder.transformer.layer.2.feed_forward.output.weight                       |  [512, 2048] |  1048576 |
+| decoder.transformer.layer.2.feed_forward.output.bias                         |        [512] |      512 |
+| decoder.transformer.layer.2.feed_forward.layer_norm.weight                   |        [512] |      512 |
+| decoder.transformer.layer.2.feed_forward.layer_norm.bias                     |        [512] |      512 |
+| decoder.transformer.layer.3.attention.key.weight                             |   [512, 512] |   262144 |
+| decoder.transformer.layer.3.attention.key.bias                               |        [512] |      512 |
+| decoder.transformer.layer.3.attention.query.weight                           |   [512, 512] |   262144 |
+| decoder.transformer.layer.3.attention.query.bias                             |        [512] |      512 |
+| decoder.transformer.layer.3.attention.value.weight                           |   [512, 512] |   262144 |
+| decoder.transformer.layer.3.attention.value.bias                             |        [512] |      512 |
+| decoder.transformer.layer.3.attention.output.weight                          |   [512, 512] |   262144 |
+| decoder.transformer.layer.3.attention.output.bias                            |        [512] |      512 |
+| decoder.transformer.layer.3.layer_norm.weight                                |        [512] |      512 |
+| decoder.transformer.layer.3.layer_norm.bias                                  |        [512] |      512 |
+| decoder.transformer.layer.3.context_attn.key.weight                          |   [512, 512] |   262144 |
+| decoder.transformer.layer.3.context_attn.key.bias                            |        [512] |      512 |
+| decoder.transformer.layer.3.context_attn.query.weight                        |   [512, 512] |   262144 |
+| decoder.transformer.layer.3.context_attn.query.bias                          |        [512] |      512 |
+| decoder.transformer.layer.3.context_attn.value.weight                        |   [512, 512] |   262144 |
+| decoder.transformer.layer.3.context_attn.value.bias                          |        [512] |      512 |
+| decoder.transformer.layer.3.context_attn.output.weight                       |   [512, 512] |   262144 |
+| decoder.transformer.layer.3.context_attn.output.bias                         |        [512] |      512 |
+| decoder.transformer.layer.3.layer_norm_2.weight                              |        [512] |      512 |
+| decoder.transformer.layer.3.layer_norm_2.bias                                |        [512] |      512 |
+| decoder.transformer.layer.3.feed_forward.intermediate.weight                 |  [2048, 512] |  1048576 |
+| decoder.transformer.layer.3.feed_forward.intermediate.bias                   |       [2048] |     2048 |
+| decoder.transformer.layer.3.feed_forward.output.weight                       |  [512, 2048] |  1048576 |
+| decoder.transformer.layer.3.feed_forward.output.bias                         |        [512] |      512 |
+| decoder.transformer.layer.3.feed_forward.layer_norm.weight                   |        [512] |      512 |
+| decoder.transformer.layer.3.feed_forward.layer_norm.bias                     |        [512] |      512 |
+| decoder.transformer.layer.4.attention.key.weight                             |   [512, 512] |   262144 |
+| decoder.transformer.layer.4.attention.key.bias                               |        [512] |      512 |
+| decoder.transformer.layer.4.attention.query.weight                           |   [512, 512] |   262144 |
+| decoder.transformer.layer.4.attention.query.bias                             |        [512] |      512 |
+| decoder.transformer.layer.4.attention.value.weight                           |   [512, 512] |   262144 |
+| decoder.transformer.layer.4.attention.value.bias                             |        [512] |      512 |
+| decoder.transformer.layer.4.attention.output.weight                          |   [512, 512] |   262144 |
+| decoder.transformer.layer.4.attention.output.bias                            |        [512] |      512 |
+| decoder.transformer.layer.4.layer_norm.weight                                |        [512] |      512 |
+| decoder.transformer.layer.4.layer_norm.bias                                  |        [512] |      512 |
+| decoder.transformer.layer.4.context_attn.key.weight                          |   [512, 512] |   262144 |
+| decoder.transformer.layer.4.context_attn.key.bias                            |        [512] |      512 |
+| decoder.transformer.layer.4.context_attn.query.weight                        |   [512, 512] |   262144 |
+| decoder.transformer.layer.4.context_attn.query.bias                          |        [512] |      512 |
+| decoder.transformer.layer.4.context_attn.value.weight                        |   [512, 512] |   262144 |
+| decoder.transformer.layer.4.context_attn.value.bias                          |        [512] |      512 |
+| decoder.transformer.layer.4.context_attn.output.weight                       |   [512, 512] |   262144 |
+| decoder.transformer.layer.4.context_attn.output.bias                         |        [512] |      512 |
+| decoder.transformer.layer.4.layer_norm_2.weight                              |        [512] |      512 |
+| decoder.transformer.layer.4.layer_norm_2.bias                                |        [512] |      512 |
+| decoder.transformer.layer.4.feed_forward.intermediate.weight                 |  [2048, 512] |  1048576 |
+| decoder.transformer.layer.4.feed_forward.intermediate.bias                   |       [2048] |     2048 |
+| decoder.transformer.layer.4.feed_forward.output.weight                       |  [512, 2048] |  1048576 |
+| decoder.transformer.layer.4.feed_forward.output.bias                         |        [512] |      512 |
+| decoder.transformer.layer.4.feed_forward.layer_norm.weight                   |        [512] |      512 |
+| decoder.transformer.layer.4.feed_forward.layer_norm.bias                     |        [512] |      512 |
+| decoder.transformer.layer.5.attention.key.weight                             |   [512, 512] |   262144 |
+| decoder.transformer.layer.5.attention.key.bias                               |        [512] |      512 |
+| decoder.transformer.layer.5.attention.query.weight                           |   [512, 512] |   262144 |
+| decoder.transformer.layer.5.attention.query.bias                             |        [512] |      512 |
+| decoder.transformer.layer.5.attention.value.weight                           |   [512, 512] |   262144 |
+| decoder.transformer.layer.5.attention.value.bias                             |        [512] |      512 |
+| decoder.transformer.layer.5.attention.output.weight                          |   [512, 512] |   262144 |
+| decoder.transformer.layer.5.attention.output.bias                            |        [512] |      512 |
+| decoder.transformer.layer.5.layer_norm.weight                                |        [512] |      512 |
+| decoder.transformer.layer.5.layer_norm.bias                                  |        [512] |      512 |
+| decoder.transformer.layer.5.context_attn.key.weight                          |   [512, 512] |   262144 |
+| decoder.transformer.layer.5.context_attn.key.bias                            |        [512] |      512 |
+| decoder.transformer.layer.5.context_attn.query.weight                        |   [512, 512] |   262144 |
+| decoder.transformer.layer.5.context_attn.query.bias                          |        [512] |      512 |
+| decoder.transformer.layer.5.context_attn.value.weight                        |   [512, 512] |   262144 |
+| decoder.transformer.layer.5.context_attn.value.bias                          |        [512] |      512 |
+| decoder.transformer.layer.5.context_attn.output.weight                       |   [512, 512] |   262144 |
+| decoder.transformer.layer.5.context_attn.output.bias                         |        [512] |      512 |
+| decoder.transformer.layer.5.layer_norm_2.weight                              |        [512] |      512 |
+| decoder.transformer.layer.5.layer_norm_2.bias                                |        [512] |      512 |
+| decoder.transformer.layer.5.feed_forward.intermediate.weight                 |  [2048, 512] |  1048576 |
+| decoder.transformer.layer.5.feed_forward.intermediate.bias                   |       [2048] |     2048 |
+| decoder.transformer.layer.5.feed_forward.output.weight                       |  [512, 2048] |  1048576 |
+| decoder.transformer.layer.5.feed_forward.output.bias                         |        [512] |      512 |
+| decoder.transformer.layer.5.feed_forward.layer_norm.weight                   |        [512] |      512 |
+| decoder.transformer.layer.5.feed_forward.layer_norm.bias                     |        [512] |      512 |
+| generator.bias                                                               |      [28239] |    28239 |
++------------------------------------------------------------------------------+--------------+----------+
+</code></pre>
+</div>
+
+</section>
+<section id="slide-orgfba5acc">
+<h4 id="orgfba5acc"><span class="section-number-4">3.3.2.</span> Only-CA</h4>
+<ul>
+<li>encoder-decoder: 44.1M</li>
+<li>total: 76.9M</li>
+
+</ul>
+<div class="org-src-container">
+
+<pre   ><code class="text" >| copy_attn.linear_in.weight        |   [512, 512] |   262144 |
+| copy_attn.linear_out.weight       |  [512, 1024] |   524288 |
+| copy_generator.linear_copy.weight |     [1, 512] |      512 |
+| copy_generator.linear_copy.bias   |          [1] |        1 |
+</code></pre>
+</div>
+
+</section>
+<section id="slide-orgc6e7bc2">
+<h4 id="orgc6e7bc2"><span class="section-number-4">3.3.3.</span> Only-RP</h4>
+<ul>
+<li>encoder-decoder: 44.2M</li>
+<li>total: 76.2M</li>
+<li>encoder (代码)使用 relative position</li>
+<li>decoder (注释)使用 absolute position</li>
+
+</ul>
+
+<div class="org-src-container">
+
+<pre   ><code class="text" >| encoder.L0.attention.rel_positions_embeddings_k.weight | [65, 64] | 4160 |
+| encoder.L0.attention.rel_positions_embeddings_v.weight | [65, 64] | 4160 |
+
+| encoder.L1.attention.rel_positions_embeddings_k.weight | [65, 64] | 4160 |
+| encoder.L1.attention.rel_positions_embeddings_v.weight | [65, 64] | 4160 |
+
+| encoder.L2.attention.rel_positions_embeddings_k.weight | [65, 64] | 4160 |
+| encoder.L2.attention.rel_positions_embeddings_v.weight | [65, 64] | 4160 |
+
+| encoder.L3.attention.rel_positions_embeddings_k.weight | [65, 64] | 4160 |
+| encoder.L3.attention.rel_positions_embeddings_v.weight | [65, 64] | 4160 |
+
+| encoder.L4.attention.rel_positions_embeddings_k.weight | [65, 64] | 4160 |
+| encoder.L4.attention.rel_positions_embeddings_v.weight | [65, 64] | 4160 |
+
+| encoder.L5.attention.rel_positions_embeddings_k.weight | [65, 64] | 4160 |
+| encoder.L5.attention.rel_positions_embeddings_v.weight | [65, 64] | 4160 |
+</code></pre>
+</div>
+
+</section>
+<section id="slide-org95929d6">
+<h4 id="org95929d6"><span class="section-number-4">3.3.4.</span> Full</h4>
+<ul>
+<li>Copy Attention + Relative Position</li>
+<li>encoder-decoder: 44.2M</li>
+<li>total: 77M</li>
+
+</ul>
+
+</section>
+</section>
+<section>
+<section id="slide-org19bdb54">
+<h3 id="org19bdb54"><span class="section-number-3">3.4.</span> 结果</h3>
+<p>
+四种模型对比
+</p>
+<ul>
+<li>BLEU / ROUGE-L</li>
+<li>训练时长</li>
+<li>几个例子</li>
+
+</ul>
+
+</section>
+<section id="slide-org19bdb54-split">
+<p>
+BLEU: 不考虑召回率, 三个模型差别较小
+</p>
+
+<div id="orgdeb3024" class="figure">
+<p><img src="./img/bleu.png" alt="bleu.png" width="70%" style="margin-left: auto; margin-right: auto;" />
+</p>
+</div>
+
+</section>
+<section id="slide-org19bdb54-split">
+<p>
+ROUGE-L: 考虑召回率, Full &gt; Only-RP &gt; Only-CA &gt; Base
+</p>
+
+<div id="org38fe72f" class="figure">
+<p><img src="./img/rouge.png" alt="rouge.png" width="70%" style="margin-left: auto; margin-right: auto;" />
+</p>
+</div>
+
+</section>
+<section id="slide-org19bdb54-split">
+
+<p>
+Full 模型测试集 BLEU 分布
+</p>
+
+<div id="org4758b43" class="figure">
+<p><img src="./img/test-bleu-bar.png" alt="test-bleu-bar.png" width="70%" style="margin-left: auto; margin-right: auto;" />
+</p>
+</div>
+
+</section>
+<section id="slide-org19bdb54-split">
+<table border="2" cellspacing="0" cellpadding="6" rules="groups" frame="hsides">
+
+
+<colgroup>
+<col  class="org-left" />
+
+<col  class="org-right" />
+
+<col  class="org-left" />
+</colgroup>
+<tbody>
+<tr>
+<td class="org-left">模型名</td>
+<td class="org-right">Epoch</td>
+<td class="org-left">训练总时长</td>
+</tr>
+
+<tr>
+<td class="org-left">Base</td>
+<td class="org-right">90</td>
+<td class="org-left">5h38m</td>
+</tr>
+
+<tr>
+<td class="org-left">Only-CA</td>
+<td class="org-right">90</td>
+<td class="org-left">6h38m  (+1h)</td>
+</tr>
+
+<tr>
+<td class="org-left">Only-RP</td>
+<td class="org-right">90</td>
+<td class="org-left">8h57m  (+3h19m)</td>
+</tr>
+
+<tr>
+<td class="org-left">Full</td>
+<td class="org-right">200</td>
+<td class="org-left">15h58m (硬件不同)</td>
+</tr>
+</tbody>
+</table>
+
+</section>
+<section id="slide-org19bdb54-split">
+
+<div class="org-src-container">
+
+<pre   ><code class="java" >public static terminal find(String with_name) {
+    if(with_name == null)
+        return null;
+    else
+        return (terminal)all.get(with_name);
+}
+</code></pre>
+</div>
+
+<table border="2" cellspacing="0" cellpadding="6" rules="groups" frame="hsides">
+
+
+<colgroup>
+<col  class="org-left" />
+
+<col  class="org-left" />
+</colgroup>
+<thead>
+<tr>
+<th scope="col" class="org-left">模型名</th>
+<th scope="col" class="org-left">结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="org-left">Base</td>
+<td class="org-left">lookup a <i><b>non</b></i> terminal by name string .</td>
+</tr>
+
+<tr>
+<td class="org-left">Only-CA</td>
+<td class="org-left">lookup a <i><b>terminal</b></i> terminal by name string .</td>
+</tr>
+
+<tr>
+<td class="org-left">Only-RP</td>
+<td class="org-left">lookup a <i><b>non</b></i> terminal by name string .</td>
+</tr>
+
+<tr>
+<td class="org-left">Full</td>
+<td class="org-left">lookup a terminal by name .</td>
+</tr>
+
+<tr>
+<td class="org-left">Reference</td>
+<td class="org-left">lookup a terminal by name string .</td>
+</tr>
+</tbody>
+</table>
+
+</section>
+<section id="slide-org19bdb54-split">
+<div class="org-src-container">
+
+<pre   ><code class="java" >public static String selectText(XPathExpression expr, Node context) {
+    try {
+        return (String)expr.evaluate(context, XPathConstants.STRING );
+    } catch (XPathExpressionException e) {
+        throw new XmlException(e);
+    }
+}
+</code></pre>
+</div>
+
+<table border="2" cellspacing="0" cellpadding="6" rules="groups" frame="hsides">
+
+
+<colgroup>
+<col  class="org-left" />
+
+<col  class="org-left" />
+</colgroup>
+<thead>
+<tr>
+<th scope="col" class="org-left">模型名</th>
+<th scope="col" class="org-left">结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="org-left">Base</td>
+<td class="org-left">evaluates the xpath expression <i><b>to a xpath expression</b></i> .</td>
+</tr>
+
+<tr>
+<td class="org-left">Only-CA</td>
+<td class="org-left">evaluates the xpath expression .</td>
+</tr>
+
+<tr>
+<td class="org-left">Only-RP</td>
+<td class="org-left">evaluates the xpath expression as a <i><b>single element</b></i> .</td>
+</tr>
+
+<tr>
+<td class="org-left">Full</td>
+<td class="org-left">evaluates the xpath expression as a text <i><b>string</b></i> .</td>
+</tr>
+
+<tr>
+<td class="org-left">Reference</td>
+<td class="org-left">evaluates the xpath expression as text .</td>
+</tr>
+</tbody>
+</table>
+
+</section>
+</section>
+<section>
+<section id="slide-org421cf85">
+<h3 id="org421cf85"><span class="section-number-3">3.5.</span> Metric的一些问题</h3>
+<p>
+高BLEU但事实性错误
+</p>
+
+<div class="org-src-container">
+
+<pre   ><code class="java" >public static void slideInFromTopAnimator(@NonNull List&lt;Animator&gt; animators,
+                                          @NonNull View view,RecyclerView recyclerView){
+    alphaAnimator(animators,view,0f);
+    animators.add(ObjectAnimator.ofFloat(view,"translationY",-recyclerView.getMeasuredHeight() &gt;&gt; 1,0));
+    if (FlexibleAdapter.DEBUG)
+        Log.v(TAG,"Added TOP Animator");
+}
+</code></pre>
+</div>
+
+<ul>
+<li>BLEU: 78.25</li>
+<li>Ref: item will slide from <b>top</b> of the screen to its natural position .</li>
+<li>Full: item will slide from <i><b>bottom</b></i> of the screen to its natural position .</li>
+
+</ul>
+
+</section>
+<section id="slide-org421cf85-split">
+
+<p>
+低BLEU但意义相似
+</p>
+
+<div class="org-src-container">
+
+<pre   ><code class="java" >public void removeListeners(){
+    listeners.clear();
+}
+</code></pre>
+</div>
+
+<ul>
+<li>BLEU: 22.09</li>
+<li>Ref: remove all existing listeners .</li>
+<li>Full: removes all listeners from the dispatcher .</li>
+
+</ul>
+</section>
+</section>
+</div>
+</div>
+<script src="../reveal.js/dist/reveal.js"></script>
+<script src="../reveal.js/plugin/highlight/highlight.js"></script>
+
+
+<script>
+// Full list of configuration options available here:
+// https://github.com/hakimel/reveal.js#configuration
+Reveal.initialize({
+plugins: [RevealHighlight],
+width:1200, margin: 0.1, minScale:0.2, maxScale:2.5, transition:'none'
+});
+
+</script>
+</body>
+</html>

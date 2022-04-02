@@ -1,0 +1,795 @@
+#+title: 基于 Transformer 的 Source Code Summarization
+
+# 是一份实验报告!!!
+# 少放代码和公式解释
+# 用自己的理解讲出来, 直观
+# 核心是实验的setting
+# - 先说数据集
+# - 输入
+# - 评价指标
+# - parameter setting
+# - 结果(验证指标)
+#   - 好的
+#   - 不好的
+# 输入 embedding 如何生成
+# beam search 参数
+# 不同长时截断？
+
+#+macro: image        #+ATTR_HTML: :width $1% :style margin-left: auto; margin-right: auto;
+
+# ###############################################################
+#                         org-reveal
+# ###############################################################
+
+# #+REVEAL_ROOT: https://cdn.jsdelivr.net/npm/reveal.js
+#+REVEAL_ROOT: ../reveal.js
+#+REVEAL_MATHJAX_URL: https://cdn.jsdelivr.net/npm/mathjax@2.7.5/MathJax.js?config=TeX-AMS-MML_HTMLorMML
+
+#+REVEAL_INIT_OPTIONS: width:1200, margin: 0.1, minScale:0.2, maxScale:2.5, transition:'none'
+
+# this supresses the "Created: xxx" in title page
+#+OPTIONS: timestamp:nil
+
+#+OPTIONS: toc:2, reveal_global_header:t
+#+REVEAL_THEME: white
+#+REVEAL_PLUGINS: (highlight)
+#+REVEAL_HIGHLIGHT_CSS: https://cdn.jsdelivr.net/npm/highlightjs/styles/atom-one-light.css
+
+# Level 1 & 2 headings are laid out horizontally
+#+REVEAL_HLEVEL: 2
+
+# align text to left
+# #+HTML_HEAD: <style> .reveal .slides > section > section { text-align:left; } </style>
+
+# smaller h1 font size
+#+HTML_HEAD: <style> .reveal h1 { font-size: 2em; } </style>
+
+# do not use upper case for headers
+#+HTML_HEAD: <style> .reveal h1, .reveal h2, .reveal h3, .reveal h4, .reveal h5, .reveal h6 { text-transform: none; } </style>
+
+# widen code block
+# #+HTML_HEAD: <style> .reveal pre { width: 100% } </style>
+
+#+macro: frag         #+ATTR_REVEAL: :frag roll-in :frag_idx $1
+# `new' does not repeat heading, while `split' does
+#+macro: new          #+REVEAL: split
+#+macro: split        #+REVEAL: split:t
+
+* 任务
+
+- Automatic Source Code Summarization (ASCS)
+- 将代码转换成自然语言
+- 函数
+  #+begin_src java
+    public static String selectText(XPathExpression expr, Node context) {
+        try {
+            return (String)expr.evaluate(context, XPathConstants.STRING );
+        } catch (XPathExpressionException e) {
+            throw new XmlException(e);
+        }
+    }
+  #+end_src
+  \to 一句话注释
+  #+begin_src text
+    evaluates the xpath expression as a text string .
+  #+end_src
+
+# On the one hand, it requires the identifier naming to reflect the
+# purpose of the function; on the other hand, it ignores the potential
+# information of source code, such as data dependence, control flow, and
+# semantic information.
+
+# repo: [[https://github.com/wasiahmad/NeuralCodeSum][NeuralCodeSum]]
+
+# 200个epoch, 每个epoch, 3090单卡
+# - train 三分钟
+# - validation 两分半
+
+# 解压 NeuralCodeSum-master.zip
+
+# 在 NeuralCodeSum-master/data/python 解压 python.zip
+# 在 NeuralCodeSum-master/data/java 解压 java.zip
+
+# 除了 requirements.txt 里的, 还要装 psutil
+
+# 训练脚本在 NeuralCodeSum-master/scripts/python 里 transformer.sh
+
+# 最后一个参数是模型文件名
+
+** 一些问题
+
+- long-range dependency
+  - +RNN+
+  - Transformer ✓
+- 代码 \neq 文本
+  - 代码非线性, 如何表示
+  - 特殊符号 =(= =)= =.= =:= ...
+  - 变量名包含多个单词
+    - =memoryIsLow= ?
+    - =memory=, =Is=, =Low= ?
+
+* 原理
+
+关注: Different design choices
+
+- 代码表示
+- Transformer
+  - Positional Encoding
+  - Copy Attention
+  - 输出
+
+** 代码表示
+
+如何表示结构化的代码?
+- 抽象语法树 X
+
+  Structure-based Traversal
+  {{{image(60)}}}
+  [[./img/sbt.png]]
+- 线性 ✓
+
+  把代码当作文本
+
+# {{{new}}}
+# {{{image(80)}}}
+# [[./img/sbt-example.png]]
+
+** Transformer
+
+[[./img/transformer.svg]]
+
+*** Positional Encoding
+
+**** 注释: 绝对位置编码
+
+- 绝对位置编码学习得到
+
+**** 代码: 相对位置编码
+
+- 每个输入向量的位置编码只与其左右 $k$ 个向量有关
+- 计算第一层 attention 时, 添加 $v'_{ij}$ 和 $k'_{ij}$ 两个向量
+  \[ \color{gray}{o_i = \sum_{j=1}^n \alpha_{ij} (v_j + \color{red}{v'_{ij}} ), \qquad e_{ij} = q_i (k_j + \color{red}{k'_{ij}})^T} \]
+- $v'_{ij}$ 和 $k'_{ij}$ 只与 $i, j$ 之间距离有关
+  $v'_{ij} = w_{dist(i, j)}$
+
+{{{new}}}
+
+- 距离的方向
+  - =a + b= $\iff$ =b + a=
+  - 是否要考虑 =a= 和 =b= 的左右方向?
+    - 即距离有无绝对值?
+    - $dist(i,j) = | i - j |$
+    - $dist(i,j) = i - j$
+  - =x = v[i] if i < len(v) else 0=
+  - 考虑方向
+- 最大距离 $k$ (clipping)
+  - $|dist(i, j)| \le k$
+
+*** Copy Attention / Copy Mechanism
+
+- 有时输入存在没见过的词
+- 学习一个概率 $p_{gen}$, 决定是否要复制该词作为输出
+
+{{{image(75)}}}
+[[./img/copy-attention.png]]
+
+*** 输出
+
+- Greedy Search X
+
+  并行取最值
+- Beam Serach ✓
+
+  依次选择前 $n$ 大
+  {{{image(80)}}}
+  [[./img/beam-search.jpg]]
+
+* 实验
+
+- 四个模型
+  - 是否使用 Relative position (相对位置编码)
+  - 是否使用 Copy attention
+
+| 模型名  | RP | CA |
+|---------+----+----|
+| Base    | X  | X  |
+| Only-CA | X  | ✓  |
+| Only-RP | ✓  | X  |
+| *Full*  | ✓  | ✓  |
+
+{{{new}}}
+
+- 环境
+  - Ubuntu 18.04 LTS
+  - 3090单卡
+  - CUDA 11.4
+  - Python 3.8.12
+  - Torch 1.10.2
+
+** 数据集
+
+[[https://github.com/xing-hu/TL-CodeSum][TL-CodeSum]]
+
+从GitHub repo中爬取Java代码
+- 每个repo至少20个star
+
+*** 预处理
+
+- 取函数注释的第一句话作为summary
+- 去除低质量代码
+  - 没有注释或注释只有几个字的
+  - getter / setter / constructor 等注释过于简单的函数
+- 注释转token
+  - 大写转小写
+  - 保留特殊字符 (=<= =>= ={= =}= =(= =)= =?= =.= =;= ...)
+  - 添加 =<unk>=, =<s>= (BOS), =</s>= (EOS)
+{{{new}}}
+- 代码转token: 减小词汇量
+  - 保留特殊字符
+  - 变量名分割
+    - =memoryIsLow= \to =memory=, =Is=, =Low=
+    - =m_BatchBuffer= \to =m=, =Batch=, =Buffer=
+    - =sha256_HMAC= \to =sha=, =256=, =HMAC=
+  - 数字 \to =_NUM= (负号保留)
+    - =-1024= \to =-=, =_NUM=
+  - 字符串 \to =STRING=
+  - 添加 =<unk>=
+
+{{{new}}}
+
+源码
+#+begin_src java
+  /**
+   ,* Is the str a simple match pattern.
+   ,*/
+  public static boolean isSimpleMatchPattern(String str) {
+      return str.indexOf('*') != -1;
+  }
+#+end_src
+
+注释
+#+begin_src text
+  is the str a simple match pattern .
+#+end_src
+
+预处理后代码
+#+begin_src text
+  public static boolean
+  is Simple Match Pattern ( String str )
+  { return str . index Of ( STRING ) != - NUM ; }
+#+end_src
+
+*** 大小
+
+共87,136个样本, 按8:1:1分割
+
+| 训练                     | 69,708  |
+| 测试                     | 8,714   |
+| 验证                     | 8,714   |
+| 函数Token (无变量名分割) | 292,626 |
+| 函数Token (变量名分割)   | 66,650  |
+| 注释Token                | 46,895  |
+
+*** 格式
+
+#+begin_src text
+  ├── dev (验证)
+  │   ├── code.original (代码)
+  │   ├── code.original_subtoken (变量名分割后代码)
+  │   └── javadoc.original (注释)
+  ├── test (测试)
+  │   ├── code.original
+  │   ├── code.original_subtoken
+  │   └── javadoc.original
+  └── train (训练)
+      ├── code.original
+      ├── code.original_subtoken
+      └── javadoc.original
+#+end_src
+
+{{{new}}}
+=train/code.original_subtoken=
+#+begin_src text
+  @ Override public int run Command ( boolean merge Error Into Output , String ... commands ) throws IO Exception , Interrupted Exception { return run Command ( merge Error Into Output , new Array List < String > ( Arrays . as List ( commands ) ) ) ; }
+  private int find PLV ( int M Price List ID ) { Timestamp price Date = null ; String date Str = Env . get Context ( Env . get Ctx ( ) , p Window No , STRING ) ; if ( date Str != null && date Str . length ( ) > NUM ) price Date = Env . get Context As Date ( Env . get Ctx ( ) , p Window No , STRING ) ; else { date Str = Env . get Context ( Env . get Ctx ( ) , p Window No , STRING ) ; if ( date Str != null && date Str . length ( ) > NUM ) price Date = Env . get Context As Date ( Env . get Ctx ( ) , p Window No , STRING ) ; } if ( price Date == null ) price Date = new Timestamp ( System . current Time Millis ( ) ) ; log . config ( STRING + M Price List ID + STRING + price Date ) ; int ret Value = NUM ; String sql = STRING + STRING + STRING + STRING + STRING + STRING ; try { Prepared Statement pstmt = DB . prepare Statement ( sql , null ) ; pstmt . set Int ( NUM , M Price List ID ) ; Result Set rs = pstmt . execute Query ( ) ; while ( rs . next ( ) && ret Value == NUM ) { Timestamp pl Date = rs . get Timestamp ( NUM ) ; if ( ! price Date . before ( pl Date ) ) ret Value = rs . get Int ( NUM ) ; } rs . close ( ) ; pstmt . close ( ) ; } catch ( SQL Exception e ) { log . log ( Level . SEVERE , sql , e ) ; } Env . set Context ( Env . get Ctx ( ) , p Window No , STRING , ret Value ) ; return ret Value ; }
+  public static boolean memory Is Low ( ) { return available Memory ( ) * NUM < RUNTIME . total Memory ( ) * NUM ; }
+  public String describe Attributes ( ) { String Builder sb = new String Builder ( ) ; sb . append ( STRING ) ; boolean first = BOOL ; for ( Object key : attributes . key Set ( ) ) { if ( first ) { first = BOOL ; } else { sb . append ( STRING ) ; } sb . append ( key ) ; sb . append ( STRING ) ; sb . append ( attributes . get ( key ) ) ; } sb . append ( STRING ) ; return sb . to String ( ) ; }
+  public static byte [ ] next Bytes ( byte [ ] buffer ) { s Random . next Bytes ( buffer ) ; return buffer ; }
+#+end_src
+
+=train/javadoc.original=
+#+begin_src text
+  runs a command on the command line synchronously .
+  find price list version and update context
+  returns true if less then 5 % of the available memory is free .
+  returns a string representation of the object ' s current attributes
+  fill the given buffer with random bytes .
+#+end_src
+
+** 评价指标
+
+# [[https://zhuanlan.zhihu.com/p/108630305][文本生成评价方法 BLEU ROUGE CIDEr SPICE Perplexity METEOR]]
+# [[https://medium.com/explorations-in-language-and-learning/metrics-for-nlg-evaluation-c89b6a781054][Metrics for NLG evaluation]]
+
+# - [[https://en.wikipedia.org/wiki/METEOR][METEOR]]
+
+- 借用机器翻译的指标 (百分制)
+  - [[https://en.wikipedia.org/wiki/BLEU][BLEU]]
+  - [[https://en.wikipedia.org/wiki/ROUGE_(metric)][ROUGE-L]] |ruːʒ|
+  - 准确率 + 召回率 + 惩罚
+- 准确率&召回率: 分母不同
+  - 分子: 原始翻译与预测结果的相似程度
+    - n-gram, LCS
+  - 分母
+    - 准确率: 预测结果
+    - 召回率: 原始翻译
+
+*** BLEU
+
+# Count the *N-gram overlap* between the machine generated output to the
+# ground truth.
+
+# Geometric mean of 1-gram to 4-gram.
+
+# [[https://www.coursera.org/lecture/machinetranslation/bleu-Bv81F][video]]
+
+- 相似: N-gram overlap (准确率)
+
+  原始翻译="a b c", 预测结果="a a b c"
+  1. (a, b, c) ∩ (a, a, b, c) \to $p_1 = 3/4$
+  2. (ab, bc) ∩ (aa, ab, bc) \to $p_2 = 2/3$
+  3. (abc) ∩ (aab, abc) \to $p_3 = 1/2$
+- 几何平均 $\sqrt[3]{p_1 \, p_2 \, p_3}$
+- 平滑: $p_i$ 分子分母加一, 防止 $p_i = 0$
+- Brevity Penalty: 预测结果不能太短
+- 不考虑召回率
+
+# *** METEOR
+
+# - mapping: 预测结果的每个词至多 map 到原始翻译的一个词
+# - unigram 准确率&召回率
+# - penalty 与 chunk 数正相关
+# - 考虑到了召回率
+
+*** ROUGE-L
+
+- 相似: 最长公共子序列(LCS)大小
+- *the* hello a cat dog *fox jumps*
+- *the fox jumps*
+
+** 参数
+
+- batch size: 训练 64, 测试 128
+- Full: 200个epoch, 其他: 90个eopch
+- 6层Transformer, 8头attention, beam size: 4
+- $d_{model} = 512$ (输入输出为一串向量, 每个向量 $x_i \in R^{d_{model}}$)
+- $d_{ff} = 2048$ (FFNN)
+- $d_k = d_v = 64$ ($W^Q, W^K \in R^{d_{model}\times d_k}$, $W^V \in R^{d_{model}\times d_v}$)
+- $k = 16$ (相对位置编码的clipping distance)
+
+{{{new}}}
+- Adam优化器, 学习率 $lr = 10^{-4}$, $decay = 0.99$
+  - 每个epoch: $lr \leftarrow lr \times decay$
+- Dropout: 0.2, 无weight decay
+- Early Stop: 20个epoch
+- 代码最大长度: 150
+- 注释最大长度: 50
+- 单个token最大长度: 30
+
+*** Base
+
+- encoder-decoder: 44.1M
+- total: 76.1M
+
+#+begin_src text
+  +------------------------------------------------------------------------------+--------------+----------+
+  | Layer Name                                                                   | Output Shape |  Param # |
+  +------------------------------------------------------------------------------+--------------+----------+
+  | embedder.src_word_embeddings.make_embedding.emb_luts.0.weight                | [34131, 512] | 17475072 |
+  | embedder.tgt_word_embeddings.make_embedding.emb_luts.0.weight                | [28239, 512] | 14458368 |
+  | embedder.tgt_pos_embeddings.weight                                           |    [52, 512] |    26624 |
+  | encoder.transformer.layer.0.attention.key.weight                             |   [512, 512] |   262144 |
+  | encoder.transformer.layer.0.attention.key.bias                               |        [512] |      512 |
+  | encoder.transformer.layer.0.attention.query.weight                           |   [512, 512] |   262144 |
+  | encoder.transformer.layer.0.attention.query.bias                             |        [512] |      512 |
+  | encoder.transformer.layer.0.attention.value.weight                           |   [512, 512] |   262144 |
+  | encoder.transformer.layer.0.attention.value.bias                             |        [512] |      512 |
+  | encoder.transformer.layer.0.attention.output.weight                          |   [512, 512] |   262144 |
+  | encoder.transformer.layer.0.attention.output.bias                            |        [512] |      512 |
+  | encoder.transformer.layer.0.layer_norm.weight                                |        [512] |      512 |
+  | encoder.transformer.layer.0.layer_norm.bias                                  |        [512] |      512 |
+  | encoder.transformer.layer.0.feed_forward.intermediate.weight                 |  [2048, 512] |  1048576 |
+  | encoder.transformer.layer.0.feed_forward.intermediate.bias                   |       [2048] |     2048 |
+  | encoder.transformer.layer.0.feed_forward.output.weight                       |  [512, 2048] |  1048576 |
+  | encoder.transformer.layer.0.feed_forward.output.bias                         |        [512] |      512 |
+  | encoder.transformer.layer.0.feed_forward.layer_norm.weight                   |        [512] |      512 |
+  | encoder.transformer.layer.0.feed_forward.layer_norm.bias                     |        [512] |      512 |
+  | encoder.transformer.layer.1.attention.key.weight                             |   [512, 512] |   262144 |
+  | encoder.transformer.layer.1.attention.key.bias                               |        [512] |      512 |
+  | encoder.transformer.layer.1.attention.query.weight                           |   [512, 512] |   262144 |
+  | encoder.transformer.layer.1.attention.query.bias                             |        [512] |      512 |
+  | encoder.transformer.layer.1.attention.value.weight                           |   [512, 512] |   262144 |
+  | encoder.transformer.layer.1.attention.value.bias                             |        [512] |      512 |
+  | encoder.transformer.layer.1.attention.output.weight                          |   [512, 512] |   262144 |
+  | encoder.transformer.layer.1.attention.output.bias                            |        [512] |      512 |
+  | encoder.transformer.layer.1.layer_norm.weight                                |        [512] |      512 |
+  | encoder.transformer.layer.1.layer_norm.bias                                  |        [512] |      512 |
+  | encoder.transformer.layer.1.feed_forward.intermediate.weight                 |  [2048, 512] |  1048576 |
+  | encoder.transformer.layer.1.feed_forward.intermediate.bias                   |       [2048] |     2048 |
+  | encoder.transformer.layer.1.feed_forward.output.weight                       |  [512, 2048] |  1048576 |
+  | encoder.transformer.layer.1.feed_forward.output.bias                         |        [512] |      512 |
+  | encoder.transformer.layer.1.feed_forward.layer_norm.weight                   |        [512] |      512 |
+  | encoder.transformer.layer.1.feed_forward.layer_norm.bias                     |        [512] |      512 |
+  | encoder.transformer.layer.2.attention.key.weight                             |   [512, 512] |   262144 |
+  | encoder.transformer.layer.2.attention.key.bias                               |        [512] |      512 |
+  | encoder.transformer.layer.2.attention.query.weight                           |   [512, 512] |   262144 |
+  | encoder.transformer.layer.2.attention.query.bias                             |        [512] |      512 |
+  | encoder.transformer.layer.2.attention.value.weight                           |   [512, 512] |   262144 |
+  | encoder.transformer.layer.2.attention.value.bias                             |        [512] |      512 |
+  | encoder.transformer.layer.2.attention.output.weight                          |   [512, 512] |   262144 |
+  | encoder.transformer.layer.2.attention.output.bias                            |        [512] |      512 |
+  | encoder.transformer.layer.2.layer_norm.weight                                |        [512] |      512 |
+  | encoder.transformer.layer.2.layer_norm.bias                                  |        [512] |      512 |
+  | encoder.transformer.layer.2.feed_forward.intermediate.weight                 |  [2048, 512] |  1048576 |
+  | encoder.transformer.layer.2.feed_forward.intermediate.bias                   |       [2048] |     2048 |
+  | encoder.transformer.layer.2.feed_forward.output.weight                       |  [512, 2048] |  1048576 |
+  | encoder.transformer.layer.2.feed_forward.output.bias                         |        [512] |      512 |
+  | encoder.transformer.layer.2.feed_forward.layer_norm.weight                   |        [512] |      512 |
+  | encoder.transformer.layer.2.feed_forward.layer_norm.bias                     |        [512] |      512 |
+  | encoder.transformer.layer.3.attention.key.weight                             |   [512, 512] |   262144 |
+  | encoder.transformer.layer.3.attention.key.bias                               |        [512] |      512 |
+  | encoder.transformer.layer.3.attention.query.weight                           |   [512, 512] |   262144 |
+  | encoder.transformer.layer.3.attention.query.bias                             |        [512] |      512 |
+  | encoder.transformer.layer.3.attention.value.weight                           |   [512, 512] |   262144 |
+  | encoder.transformer.layer.3.attention.value.bias                             |        [512] |      512 |
+  | encoder.transformer.layer.3.attention.output.weight                          |   [512, 512] |   262144 |
+  | encoder.transformer.layer.3.attention.output.bias                            |        [512] |      512 |
+  | encoder.transformer.layer.3.layer_norm.weight                                |        [512] |      512 |
+  | encoder.transformer.layer.3.layer_norm.bias                                  |        [512] |      512 |
+  | encoder.transformer.layer.3.feed_forward.intermediate.weight                 |  [2048, 512] |  1048576 |
+  | encoder.transformer.layer.3.feed_forward.intermediate.bias                   |       [2048] |     2048 |
+  | encoder.transformer.layer.3.feed_forward.output.weight                       |  [512, 2048] |  1048576 |
+  | encoder.transformer.layer.3.feed_forward.output.bias                         |        [512] |      512 |
+  | encoder.transformer.layer.3.feed_forward.layer_norm.weight                   |        [512] |      512 |
+  | encoder.transformer.layer.3.feed_forward.layer_norm.bias                     |        [512] |      512 |
+  | encoder.transformer.layer.4.attention.key.weight                             |   [512, 512] |   262144 |
+  | encoder.transformer.layer.4.attention.key.bias                               |        [512] |      512 |
+  | encoder.transformer.layer.4.attention.query.weight                           |   [512, 512] |   262144 |
+  | encoder.transformer.layer.4.attention.query.bias                             |        [512] |      512 |
+  | encoder.transformer.layer.4.attention.value.weight                           |   [512, 512] |   262144 |
+  | encoder.transformer.layer.4.attention.value.bias                             |        [512] |      512 |
+  | encoder.transformer.layer.4.attention.output.weight                          |   [512, 512] |   262144 |
+  | encoder.transformer.layer.4.attention.output.bias                            |        [512] |      512 |
+  | encoder.transformer.layer.4.layer_norm.weight                                |        [512] |      512 |
+  | encoder.transformer.layer.4.layer_norm.bias                                  |        [512] |      512 |
+  | encoder.transformer.layer.4.feed_forward.intermediate.weight                 |  [2048, 512] |  1048576 |
+  | encoder.transformer.layer.4.feed_forward.intermediate.bias                   |       [2048] |     2048 |
+  | encoder.transformer.layer.4.feed_forward.output.weight                       |  [512, 2048] |  1048576 |
+  | encoder.transformer.layer.4.feed_forward.output.bias                         |        [512] |      512 |
+  | encoder.transformer.layer.4.feed_forward.layer_norm.weight                   |        [512] |      512 |
+  | encoder.transformer.layer.4.feed_forward.layer_norm.bias                     |        [512] |      512 |
+  | encoder.transformer.layer.5.attention.key.weight                             |   [512, 512] |   262144 |
+  | encoder.transformer.layer.5.attention.key.bias                               |        [512] |      512 |
+  | encoder.transformer.layer.5.attention.query.weight                           |   [512, 512] |   262144 |
+  | encoder.transformer.layer.5.attention.query.bias                             |        [512] |      512 |
+  | encoder.transformer.layer.5.attention.value.weight                           |   [512, 512] |   262144 |
+  | encoder.transformer.layer.5.attention.value.bias                             |        [512] |      512 |
+  | encoder.transformer.layer.5.attention.output.weight                          |   [512, 512] |   262144 |
+  | encoder.transformer.layer.5.attention.output.bias                            |        [512] |      512 |
+  | encoder.transformer.layer.5.layer_norm.weight                                |        [512] |      512 |
+  | encoder.transformer.layer.5.layer_norm.bias                                  |        [512] |      512 |
+  | encoder.transformer.layer.5.feed_forward.intermediate.weight                 |  [2048, 512] |  1048576 |
+  | encoder.transformer.layer.5.feed_forward.intermediate.bias                   |       [2048] |     2048 |
+  | encoder.transformer.layer.5.feed_forward.output.weight                       |  [512, 2048] |  1048576 |
+  | encoder.transformer.layer.5.feed_forward.output.bias                         |        [512] |      512 |
+  | encoder.transformer.layer.5.feed_forward.layer_norm.weight                   |        [512] |      512 |
+  | encoder.transformer.layer.5.feed_forward.layer_norm.bias                     |        [512] |      512 |
+  | decoder.transformer.layer.0.attention.key.weight                             |   [512, 512] |   262144 |
+  | decoder.transformer.layer.0.attention.key.bias                               |        [512] |      512 |
+  | decoder.transformer.layer.0.attention.query.weight                           |   [512, 512] |   262144 |
+  | decoder.transformer.layer.0.attention.query.bias                             |        [512] |      512 |
+  | decoder.transformer.layer.0.attention.value.weight                           |   [512, 512] |   262144 |
+  | decoder.transformer.layer.0.attention.value.bias                             |        [512] |      512 |
+  | decoder.transformer.layer.0.attention.output.weight                          |   [512, 512] |   262144 |
+  | decoder.transformer.layer.0.attention.output.bias                            |        [512] |      512 |
+  | decoder.transformer.layer.0.layer_norm.weight                                |        [512] |      512 |
+  | decoder.transformer.layer.0.layer_norm.bias                                  |        [512] |      512 |
+  | decoder.transformer.layer.0.context_attn.key.weight                          |   [512, 512] |   262144 |
+  | decoder.transformer.layer.0.context_attn.key.bias                            |        [512] |      512 |
+  | decoder.transformer.layer.0.context_attn.query.weight                        |   [512, 512] |   262144 |
+  | decoder.transformer.layer.0.context_attn.query.bias                          |        [512] |      512 |
+  | decoder.transformer.layer.0.context_attn.value.weight                        |   [512, 512] |   262144 |
+  | decoder.transformer.layer.0.context_attn.value.bias                          |        [512] |      512 |
+  | decoder.transformer.layer.0.context_attn.output.weight                       |   [512, 512] |   262144 |
+  | decoder.transformer.layer.0.context_attn.output.bias                         |        [512] |      512 |
+  | decoder.transformer.layer.0.layer_norm_2.weight                              |        [512] |      512 |
+  | decoder.transformer.layer.0.layer_norm_2.bias                                |        [512] |      512 |
+  | decoder.transformer.layer.0.feed_forward.intermediate.weight                 |  [2048, 512] |  1048576 |
+  | decoder.transformer.layer.0.feed_forward.intermediate.bias                   |       [2048] |     2048 |
+  | decoder.transformer.layer.0.feed_forward.output.weight                       |  [512, 2048] |  1048576 |
+  | decoder.transformer.layer.0.feed_forward.output.bias                         |        [512] |      512 |
+  | decoder.transformer.layer.0.feed_forward.layer_norm.weight                   |        [512] |      512 |
+  | decoder.transformer.layer.0.feed_forward.layer_norm.bias                     |        [512] |      512 |
+  | decoder.transformer.layer.1.attention.key.weight                             |   [512, 512] |   262144 |
+  | decoder.transformer.layer.1.attention.key.bias                               |        [512] |      512 |
+  | decoder.transformer.layer.1.attention.query.weight                           |   [512, 512] |   262144 |
+  | decoder.transformer.layer.1.attention.query.bias                             |        [512] |      512 |
+  | decoder.transformer.layer.1.attention.value.weight                           |   [512, 512] |   262144 |
+  | decoder.transformer.layer.1.attention.value.bias                             |        [512] |      512 |
+  | decoder.transformer.layer.1.attention.output.weight                          |   [512, 512] |   262144 |
+  | decoder.transformer.layer.1.attention.output.bias                            |        [512] |      512 |
+  | decoder.transformer.layer.1.layer_norm.weight                                |        [512] |      512 |
+  | decoder.transformer.layer.1.layer_norm.bias                                  |        [512] |      512 |
+  | decoder.transformer.layer.1.context_attn.key.weight                          |   [512, 512] |   262144 |
+  | decoder.transformer.layer.1.context_attn.key.bias                            |        [512] |      512 |
+  | decoder.transformer.layer.1.context_attn.query.weight                        |   [512, 512] |   262144 |
+  | decoder.transformer.layer.1.context_attn.query.bias                          |        [512] |      512 |
+  | decoder.transformer.layer.1.context_attn.value.weight                        |   [512, 512] |   262144 |
+  | decoder.transformer.layer.1.context_attn.value.bias                          |        [512] |      512 |
+  | decoder.transformer.layer.1.context_attn.output.weight                       |   [512, 512] |   262144 |
+  | decoder.transformer.layer.1.context_attn.output.bias                         |        [512] |      512 |
+  | decoder.transformer.layer.1.layer_norm_2.weight                              |        [512] |      512 |
+  | decoder.transformer.layer.1.layer_norm_2.bias                                |        [512] |      512 |
+  | decoder.transformer.layer.1.feed_forward.intermediate.weight                 |  [2048, 512] |  1048576 |
+  | decoder.transformer.layer.1.feed_forward.intermediate.bias                   |       [2048] |     2048 |
+  | decoder.transformer.layer.1.feed_forward.output.weight                       |  [512, 2048] |  1048576 |
+  | decoder.transformer.layer.1.feed_forward.output.bias                         |        [512] |      512 |
+  | decoder.transformer.layer.1.feed_forward.layer_norm.weight                   |        [512] |      512 |
+  | decoder.transformer.layer.1.feed_forward.layer_norm.bias                     |        [512] |      512 |
+  | decoder.transformer.layer.2.attention.key.weight                             |   [512, 512] |   262144 |
+  | decoder.transformer.layer.2.attention.key.bias                               |        [512] |      512 |
+  | decoder.transformer.layer.2.attention.query.weight                           |   [512, 512] |   262144 |
+  | decoder.transformer.layer.2.attention.query.bias                             |        [512] |      512 |
+  | decoder.transformer.layer.2.attention.value.weight                           |   [512, 512] |   262144 |
+  | decoder.transformer.layer.2.attention.value.bias                             |        [512] |      512 |
+  | decoder.transformer.layer.2.attention.output.weight                          |   [512, 512] |   262144 |
+  | decoder.transformer.layer.2.attention.output.bias                            |        [512] |      512 |
+  | decoder.transformer.layer.2.layer_norm.weight                                |        [512] |      512 |
+  | decoder.transformer.layer.2.layer_norm.bias                                  |        [512] |      512 |
+  | decoder.transformer.layer.2.context_attn.key.weight                          |   [512, 512] |   262144 |
+  | decoder.transformer.layer.2.context_attn.key.bias                            |        [512] |      512 |
+  | decoder.transformer.layer.2.context_attn.query.weight                        |   [512, 512] |   262144 |
+  | decoder.transformer.layer.2.context_attn.query.bias                          |        [512] |      512 |
+  | decoder.transformer.layer.2.context_attn.value.weight                        |   [512, 512] |   262144 |
+  | decoder.transformer.layer.2.context_attn.value.bias                          |        [512] |      512 |
+  | decoder.transformer.layer.2.context_attn.output.weight                       |   [512, 512] |   262144 |
+  | decoder.transformer.layer.2.context_attn.output.bias                         |        [512] |      512 |
+  | decoder.transformer.layer.2.layer_norm_2.weight                              |        [512] |      512 |
+  | decoder.transformer.layer.2.layer_norm_2.bias                                |        [512] |      512 |
+  | decoder.transformer.layer.2.feed_forward.intermediate.weight                 |  [2048, 512] |  1048576 |
+  | decoder.transformer.layer.2.feed_forward.intermediate.bias                   |       [2048] |     2048 |
+  | decoder.transformer.layer.2.feed_forward.output.weight                       |  [512, 2048] |  1048576 |
+  | decoder.transformer.layer.2.feed_forward.output.bias                         |        [512] |      512 |
+  | decoder.transformer.layer.2.feed_forward.layer_norm.weight                   |        [512] |      512 |
+  | decoder.transformer.layer.2.feed_forward.layer_norm.bias                     |        [512] |      512 |
+  | decoder.transformer.layer.3.attention.key.weight                             |   [512, 512] |   262144 |
+  | decoder.transformer.layer.3.attention.key.bias                               |        [512] |      512 |
+  | decoder.transformer.layer.3.attention.query.weight                           |   [512, 512] |   262144 |
+  | decoder.transformer.layer.3.attention.query.bias                             |        [512] |      512 |
+  | decoder.transformer.layer.3.attention.value.weight                           |   [512, 512] |   262144 |
+  | decoder.transformer.layer.3.attention.value.bias                             |        [512] |      512 |
+  | decoder.transformer.layer.3.attention.output.weight                          |   [512, 512] |   262144 |
+  | decoder.transformer.layer.3.attention.output.bias                            |        [512] |      512 |
+  | decoder.transformer.layer.3.layer_norm.weight                                |        [512] |      512 |
+  | decoder.transformer.layer.3.layer_norm.bias                                  |        [512] |      512 |
+  | decoder.transformer.layer.3.context_attn.key.weight                          |   [512, 512] |   262144 |
+  | decoder.transformer.layer.3.context_attn.key.bias                            |        [512] |      512 |
+  | decoder.transformer.layer.3.context_attn.query.weight                        |   [512, 512] |   262144 |
+  | decoder.transformer.layer.3.context_attn.query.bias                          |        [512] |      512 |
+  | decoder.transformer.layer.3.context_attn.value.weight                        |   [512, 512] |   262144 |
+  | decoder.transformer.layer.3.context_attn.value.bias                          |        [512] |      512 |
+  | decoder.transformer.layer.3.context_attn.output.weight                       |   [512, 512] |   262144 |
+  | decoder.transformer.layer.3.context_attn.output.bias                         |        [512] |      512 |
+  | decoder.transformer.layer.3.layer_norm_2.weight                              |        [512] |      512 |
+  | decoder.transformer.layer.3.layer_norm_2.bias                                |        [512] |      512 |
+  | decoder.transformer.layer.3.feed_forward.intermediate.weight                 |  [2048, 512] |  1048576 |
+  | decoder.transformer.layer.3.feed_forward.intermediate.bias                   |       [2048] |     2048 |
+  | decoder.transformer.layer.3.feed_forward.output.weight                       |  [512, 2048] |  1048576 |
+  | decoder.transformer.layer.3.feed_forward.output.bias                         |        [512] |      512 |
+  | decoder.transformer.layer.3.feed_forward.layer_norm.weight                   |        [512] |      512 |
+  | decoder.transformer.layer.3.feed_forward.layer_norm.bias                     |        [512] |      512 |
+  | decoder.transformer.layer.4.attention.key.weight                             |   [512, 512] |   262144 |
+  | decoder.transformer.layer.4.attention.key.bias                               |        [512] |      512 |
+  | decoder.transformer.layer.4.attention.query.weight                           |   [512, 512] |   262144 |
+  | decoder.transformer.layer.4.attention.query.bias                             |        [512] |      512 |
+  | decoder.transformer.layer.4.attention.value.weight                           |   [512, 512] |   262144 |
+  | decoder.transformer.layer.4.attention.value.bias                             |        [512] |      512 |
+  | decoder.transformer.layer.4.attention.output.weight                          |   [512, 512] |   262144 |
+  | decoder.transformer.layer.4.attention.output.bias                            |        [512] |      512 |
+  | decoder.transformer.layer.4.layer_norm.weight                                |        [512] |      512 |
+  | decoder.transformer.layer.4.layer_norm.bias                                  |        [512] |      512 |
+  | decoder.transformer.layer.4.context_attn.key.weight                          |   [512, 512] |   262144 |
+  | decoder.transformer.layer.4.context_attn.key.bias                            |        [512] |      512 |
+  | decoder.transformer.layer.4.context_attn.query.weight                        |   [512, 512] |   262144 |
+  | decoder.transformer.layer.4.context_attn.query.bias                          |        [512] |      512 |
+  | decoder.transformer.layer.4.context_attn.value.weight                        |   [512, 512] |   262144 |
+  | decoder.transformer.layer.4.context_attn.value.bias                          |        [512] |      512 |
+  | decoder.transformer.layer.4.context_attn.output.weight                       |   [512, 512] |   262144 |
+  | decoder.transformer.layer.4.context_attn.output.bias                         |        [512] |      512 |
+  | decoder.transformer.layer.4.layer_norm_2.weight                              |        [512] |      512 |
+  | decoder.transformer.layer.4.layer_norm_2.bias                                |        [512] |      512 |
+  | decoder.transformer.layer.4.feed_forward.intermediate.weight                 |  [2048, 512] |  1048576 |
+  | decoder.transformer.layer.4.feed_forward.intermediate.bias                   |       [2048] |     2048 |
+  | decoder.transformer.layer.4.feed_forward.output.weight                       |  [512, 2048] |  1048576 |
+  | decoder.transformer.layer.4.feed_forward.output.bias                         |        [512] |      512 |
+  | decoder.transformer.layer.4.feed_forward.layer_norm.weight                   |        [512] |      512 |
+  | decoder.transformer.layer.4.feed_forward.layer_norm.bias                     |        [512] |      512 |
+  | decoder.transformer.layer.5.attention.key.weight                             |   [512, 512] |   262144 |
+  | decoder.transformer.layer.5.attention.key.bias                               |        [512] |      512 |
+  | decoder.transformer.layer.5.attention.query.weight                           |   [512, 512] |   262144 |
+  | decoder.transformer.layer.5.attention.query.bias                             |        [512] |      512 |
+  | decoder.transformer.layer.5.attention.value.weight                           |   [512, 512] |   262144 |
+  | decoder.transformer.layer.5.attention.value.bias                             |        [512] |      512 |
+  | decoder.transformer.layer.5.attention.output.weight                          |   [512, 512] |   262144 |
+  | decoder.transformer.layer.5.attention.output.bias                            |        [512] |      512 |
+  | decoder.transformer.layer.5.layer_norm.weight                                |        [512] |      512 |
+  | decoder.transformer.layer.5.layer_norm.bias                                  |        [512] |      512 |
+  | decoder.transformer.layer.5.context_attn.key.weight                          |   [512, 512] |   262144 |
+  | decoder.transformer.layer.5.context_attn.key.bias                            |        [512] |      512 |
+  | decoder.transformer.layer.5.context_attn.query.weight                        |   [512, 512] |   262144 |
+  | decoder.transformer.layer.5.context_attn.query.bias                          |        [512] |      512 |
+  | decoder.transformer.layer.5.context_attn.value.weight                        |   [512, 512] |   262144 |
+  | decoder.transformer.layer.5.context_attn.value.bias                          |        [512] |      512 |
+  | decoder.transformer.layer.5.context_attn.output.weight                       |   [512, 512] |   262144 |
+  | decoder.transformer.layer.5.context_attn.output.bias                         |        [512] |      512 |
+  | decoder.transformer.layer.5.layer_norm_2.weight                              |        [512] |      512 |
+  | decoder.transformer.layer.5.layer_norm_2.bias                                |        [512] |      512 |
+  | decoder.transformer.layer.5.feed_forward.intermediate.weight                 |  [2048, 512] |  1048576 |
+  | decoder.transformer.layer.5.feed_forward.intermediate.bias                   |       [2048] |     2048 |
+  | decoder.transformer.layer.5.feed_forward.output.weight                       |  [512, 2048] |  1048576 |
+  | decoder.transformer.layer.5.feed_forward.output.bias                         |        [512] |      512 |
+  | decoder.transformer.layer.5.feed_forward.layer_norm.weight                   |        [512] |      512 |
+  | decoder.transformer.layer.5.feed_forward.layer_norm.bias                     |        [512] |      512 |
+  | generator.bias                                                               |      [28239] |    28239 |
+  +------------------------------------------------------------------------------+--------------+----------+
+#+end_src
+
+*** Only-CA
+
+- encoder-decoder: 44.1M
+- total: 76.9M
+#+begin_src text
+  | copy_attn.linear_in.weight        |   [512, 512] |   262144 |
+  | copy_attn.linear_out.weight       |  [512, 1024] |   524288 |
+  | copy_generator.linear_copy.weight |     [1, 512] |      512 |
+  | copy_generator.linear_copy.bias   |          [1] |        1 |
+#+end_src
+
+*** Only-RP
+
+- encoder-decoder: 44.2M
+- total: 76.2M
+- encoder (代码)使用 relative position
+- decoder (注释)使用 absolute position
+
+#+begin_src text
+  | encoder.L0.attention.rel_positions_embeddings_k.weight | [65, 64] | 4160 |
+  | encoder.L0.attention.rel_positions_embeddings_v.weight | [65, 64] | 4160 |
+
+  | encoder.L1.attention.rel_positions_embeddings_k.weight | [65, 64] | 4160 |
+  | encoder.L1.attention.rel_positions_embeddings_v.weight | [65, 64] | 4160 |
+
+  | encoder.L2.attention.rel_positions_embeddings_k.weight | [65, 64] | 4160 |
+  | encoder.L2.attention.rel_positions_embeddings_v.weight | [65, 64] | 4160 |
+
+  | encoder.L3.attention.rel_positions_embeddings_k.weight | [65, 64] | 4160 |
+  | encoder.L3.attention.rel_positions_embeddings_v.weight | [65, 64] | 4160 |
+
+  | encoder.L4.attention.rel_positions_embeddings_k.weight | [65, 64] | 4160 |
+  | encoder.L4.attention.rel_positions_embeddings_v.weight | [65, 64] | 4160 |
+
+  | encoder.L5.attention.rel_positions_embeddings_k.weight | [65, 64] | 4160 |
+  | encoder.L5.attention.rel_positions_embeddings_v.weight | [65, 64] | 4160 |
+#+end_src
+
+*** Full
+
+- Copy Attention + Relative Position
+- encoder-decoder: 44.2M
+- total: 77M
+
+** 结果
+
+四种模型对比
+- BLEU / ROUGE-L
+- 训练时长
+- 几个例子
+
+{{{new}}}
+BLEU: 不考虑召回率, 三个模型差别较小
+{{{image(70)}}}
+[[./img/bleu.png]]
+
+{{{new}}}
+ROUGE-L: 考虑召回率, Full > Only-RP > Only-CA > Base
+{{{image(70)}}}
+[[./img/rouge.png]]
+
+{{{new}}}
+
+Full 模型测试集 BLEU 分布
+{{{image(70)}}}
+[[./img/test-bleu-bar.png]]
+
+{{{new}}}
+| 模型名  | Epoch | 训练总时长        |
+| Base    |    90 | 5h38m             |
+| Only-CA |    90 | 6h38m  (+1h)      |
+| Only-RP |    90 | 8h57m  (+3h19m)   |
+| Full    |   200 | 15h58m (硬件不同) |
+
+{{{new}}}
+
+#+begin_src java
+  public static terminal find(String with_name) {
+      if(with_name == null)
+          return null;
+      else
+          return (terminal)all.get(with_name);
+  }
+#+end_src
+
+| 模型名    | 结果                                            |
+|-----------+-------------------------------------------------|
+| Base      | lookup a /*non*/ terminal by name string .      |
+| Only-CA   | lookup a /*terminal*/ terminal by name string . |
+| Only-RP   | lookup a /*non*/ terminal by name string .      |
+| Full      | lookup a terminal by name .                     |
+| Reference | lookup a terminal by name string .              |
+
+{{{new}}}
+#+begin_src java
+  public static String selectText(XPathExpression expr, Node context) {
+      try {
+          return (String)expr.evaluate(context, XPathConstants.STRING );
+      } catch (XPathExpressionException e) {
+          throw new XmlException(e);
+      }
+  }
+#+end_src
+
+# - Base: evaluates the xpath expression to a xpath expression .
+# - CA: evaluates the xpath expression .
+# - RP: evaluates the xpath expression as a single element .
+# - CA+RP: evaluates the xpath expression as a text string .
+# - Reference: evaluates the xpath expression as text .
+
+| 模型名    | 结果                                                       |
+|-----------+------------------------------------------------------------|
+| Base      | evaluates the xpath expression /*to a xpath expression*/ . |
+| Only-CA   | evaluates the xpath expression .                           |
+| Only-RP   | evaluates the xpath expression as a /*single element*/ .   |
+| Full      | evaluates the xpath expression as a text /*string*/ .      |
+| Reference | evaluates the xpath expression as text .                   |
+
+** Metric的一些问题
+
+高BLEU但事实性错误
+
+#+begin_src java
+  public static void slideInFromTopAnimator(@NonNull List<Animator> animators,
+                                            @NonNull View view,RecyclerView recyclerView){
+      alphaAnimator(animators,view,0f);
+      animators.add(ObjectAnimator.ofFloat(view,"translationY",-recyclerView.getMeasuredHeight() >> 1,0));
+      if (FlexibleAdapter.DEBUG)
+          Log.v(TAG,"Added TOP Animator");
+  }
+#+end_src
+
+- BLEU: 78.25
+- Ref: item will slide from *top* of the screen to its natural position .
+- Full: item will slide from /*bottom*/ of the screen to its natural position .
+
+{{{new}}}
+
+低BLEU但意义相似
+
+#+begin_src java
+  public void removeListeners(){
+      listeners.clear();
+  }
+#+end_src
+
+- BLEU: 22.09
+- Ref: remove all existing listeners .
+- Full: removes all listeners from the dispatcher .
